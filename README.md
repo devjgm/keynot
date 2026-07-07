@@ -12,6 +12,8 @@ ________________
 Terminal slide presentations from a single markdown file. Like Keynote,
 but it's not, and it lives in your terminal, like you.
 
+![keynot demo](https://raw.githubusercontent.com/devjgm/keynot/main/assets/demo.gif)
+
 - One `.keynot` file per presentation: YAML frontmatter for metadata and
   theming, slides in plain markdown separated by `---`, HTML comments as
   speaker notes (a format in the spirit of [marp](https://marp.app))
