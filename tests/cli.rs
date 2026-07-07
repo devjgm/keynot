@@ -273,7 +273,7 @@ Terminal slide presentations from markdown
     keynot new my-talk.keynot  # Then edit the markdown in the file
     keynot play my-talk.keynot
 
-Usage: keynot <COMMAND>
+Usage: keynot[EXE] <COMMAND>
 
 Commands:
   play   Play a presentation

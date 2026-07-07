@@ -32,17 +32,17 @@ pub enum ThemeError {
 }
 
 impl Theme {
-    /// Deep navy with electric blue and amber: near-black blue background,
-    /// blue headings and links, gold accents for highlights.
+    /// The Tokyo Night palette: deep indigo background, periwinkle text,
+    /// blue headings, purple accents, cyan links.
     pub fn dark() -> Self {
         Theme {
-            background: Color::from_u32(0x000a0e17),
-            text: Color::from_u32(0x00b8c4e6),
-            heading: Color::from_u32(0x004d9fff),
-            accent: Color::from_u32(0x00f7b500),
-            link: Color::from_u32(0x006db3ff),
-            blockquote: Color::from_u32(0x003d5aa8),
-            code_background: Color::from_u32(0x00121a2e),
+            background: Color::from_u32(0x001a1b26),
+            text: Color::from_u32(0x00c0caf5),
+            heading: Color::from_u32(0x007aa2f7),
+            accent: Color::from_u32(0x00bb9af7),
+            link: Color::from_u32(0x007dcfff),
+            blockquote: Color::from_u32(0x009ece6a),
+            code_background: Color::from_u32(0x0024283b),
             code_theme: "base16-ocean.dark".to_string(),
         }
     }
@@ -126,10 +126,11 @@ mod tests {
 
     #[test]
     fn dark_theme_palette() {
+        // Tokyo Night.
         let theme = Theme::dark();
-        assert_eq!(theme.background, Color::Rgb(0x0a, 0x0e, 0x17));
-        assert_eq!(theme.heading, Color::Rgb(0x4d, 0x9f, 0xff));
-        assert_eq!(theme.accent, Color::Rgb(0xf7, 0xb5, 0x00));
+        assert_eq!(theme.background, Color::Rgb(0x1a, 0x1b, 0x26));
+        assert_eq!(theme.heading, Color::Rgb(0x7a, 0xa2, 0xf7));
+        assert_eq!(theme.accent, Color::Rgb(0xbb, 0x9a, 0xf7));
     }
 
     #[test]

@@ -82,7 +82,7 @@ Notes:
 
 | theme   | look                                                            |
 |---------|-----------------------------------------------------------------|
-| `dark`  | deep navy, electric blue headings, amber accents (the default)  |
+| `dark`  | Tokyo Night: indigo background, blue headings, purple accents (the default) |
 | `light` | near-white background, dark text                                |
 
 Every color can then be overridden individually under `colors:`. Color
