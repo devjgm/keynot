@@ -3,7 +3,7 @@
 mod config;
 mod images;
 
-use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Transition};
+use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Slide, Transition};
 use crate::render::{Highlighter, RenderContext, RenderedSlide, render_slide};
 use crate::theme::Theme;
 use config::TransitionEffects;
@@ -18,10 +18,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui_image::StatefulImage;
 use ratatui_image::picker::Picker;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tachyonfx::Effect;
-use tachyonfx::EffectRenderer;
+use tachyonfx::{Effect, EffectRenderer};
 
 /// Options for `keynot play`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -62,12 +62,28 @@ pub fn load(path: &Path, highlighter: &Highlighter) -> Result<LoadedPresentation
 pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     let highlighter = Highlighter::new();
     let loaded = load(path, &highlighter)?;
+
+    // Fetch and decode images before entering the TUI, so a slow network
+    // delays startup visibly instead of freezing a blank screen.
+    let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    if images::has_url_images(&loaded.presentation.slides) {
+        println!("keynot: fetching images...");
+    }
+    let decoded = images::decode_all(&loaded.presentation.slides, &base);
+
     let mut terminal = ratatui::init();
     // Probe the terminal for its graphics protocol and font size. This
     // should run after terminal init; ratatui-image manages raw mode for
     // its own stdio query round-trip.
     let picker = Picker::from_query_stdio().ok();
-    let mut app = App::new(path.to_path_buf(), loaded, highlighter, picker, options);
+    let mut app = App::new(
+        path.to_path_buf(),
+        loaded,
+        highlighter,
+        picker,
+        decoded,
+        options,
+    );
     let result = app.run(&mut terminal);
     // ratatui::restore() does not unhide the cursor that draw() hides.
     let _ = terminal.show_cursor();
@@ -81,16 +97,62 @@ enum Mode {
     Outline,
 }
 
+/// One slide rendered for a specific size, so idle and animation frames
+/// skip re-rendering (and especially re-highlighting) unchanged slides.
+/// Cache hits draw `paragraph` by reference, allocation-free.
+struct RenderCache {
+    index: usize,
+    width: u16,
+    height: u16,
+    rendered: RenderedSlide,
+    paragraph: Paragraph<'static>,
+    /// Indices of non-blank lines: the highlight cursor's domain.
+    non_blank: Vec<usize>,
+}
+
+/// Style the line at `target` per the `highlight:` metadata key: an
+/// accent bar behind it, or dimming everything else.
+fn style_highlight(
+    theme: &Theme,
+    style: HighlightStyle,
+    text: &mut Text<'static>,
+    width: usize,
+    target: usize,
+) {
+    match style {
+        HighlightStyle::Dim => {
+            for (i, line) in text.lines.iter_mut().enumerate() {
+                if i != target {
+                    line.style = line.style.add_modifier(Modifier::DIM);
+                }
+            }
+        }
+        HighlightStyle::Bar => {
+            // Repaint the line onto a full-width accent bar. The bar
+            // owns the colors (fg becomes the background color, since
+            // arbitrary foregrounds like syntax colors are unreadable
+            // on the accent); bold/italic and such survive.
+            let bar = Style::default().fg(theme.background).bg(theme.accent);
+            let line = &mut text.lines[target];
+            line.style = line.style.patch(bar);
+            for span in &mut line.spans {
+                span.style = span.style.patch(bar);
+            }
+            let pad = width.saturating_sub(line.width());
+            if pad > 0 {
+                line.spans.push(Span::styled(" ".repeat(pad), bar));
+            }
+        }
+    }
+}
+
 struct App {
     path: PathBuf,
     presentation: Presentation,
     theme: Theme,
     highlighter: Highlighter,
     images: Images,
-    /// Rendered text and image placements for `(slide index, width,
-    /// height)`, so idle and animation frames skip re-rendering (and
-    /// especially re-highlighting) unchanged slides.
-    render_cache: Option<(usize, u16, u16, RenderedSlide)>,
+    render_cache: Option<RenderCache>,
     current: usize,
     mode: Mode,
     /// Outline cursor (slide index).
@@ -123,6 +185,7 @@ impl App {
         loaded: LoadedPresentation,
         highlighter: Highlighter,
         picker: Option<Picker>,
+        decoded: HashMap<String, images::Decoded>,
         options: PlayOptions,
     ) -> Self {
         // Upheld by Presentation::parse (NoSlides); asserted here because
@@ -135,7 +198,8 @@ impl App {
         let current = options.start_slide.saturating_sub(1).min(last);
         let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut images = Images::new(picker, base);
-        images.preload_all(&loaded.presentation.slides);
+        images.adopt(decoded);
+        let error = images.take_errors().into_iter().next();
         App {
             path,
             presentation: loaded.presentation,
@@ -154,7 +218,7 @@ impl App {
             effect: None,
             outgoing: None,
             pending_enter: None,
-            error: None,
+            error,
             last_frame: Instant::now(),
         }
     }
@@ -367,7 +431,6 @@ impl App {
                 self.selected = self.selected.min(loaded.presentation.slides.len() - 1);
                 self.presentation = loaded.presentation;
                 self.theme = loaded.theme;
-                self.error = None;
                 // Slide indices may have shifted; drop any running animation
                 // and line highlight, and re-read images and rendered
                 // slides from scratch.
@@ -377,6 +440,7 @@ impl App {
                 self.highlight = None;
                 self.images.clear();
                 self.images.preload_all(&self.presentation.slides);
+                self.error = self.images.take_errors().into_iter().next();
                 self.render_cache = None;
             }
             Err(err) => self.error = Some(format!("reload failed: {err:#}")),
@@ -415,16 +479,13 @@ impl App {
         }
     }
 
-    /// Render (or fetch from the cache) the slide at `index`, sized for
-    /// `content`. Highlighting is applied by the caller on a copy, so the
-    /// cached text stays pristine.
-    fn rendered_slide(&mut self, index: usize, content: Rect) -> RenderedSlide {
-        if let Some((i, w, h, rendered)) = &self.render_cache
-            && *i == index
-            && *w == content.width
-            && *h == content.height
-        {
-            return rendered.clone();
+    /// Fill the render cache for the slide at `index`, sized for
+    /// `content`, unless it already holds exactly that.
+    fn ensure_rendered(&mut self, index: usize, content: Rect) {
+        if self.render_cache.as_ref().is_some_and(|c| {
+            c.index == index && c.width == content.width && c.height == content.height
+        }) {
+            return;
         }
         self.images.preload(&self.presentation.slides[index]);
         let images = &self.images;
@@ -437,35 +498,77 @@ impl App {
         };
         let slide = &self.presentation.slides[index];
         let rendered = render_slide(slide, &ctx, content.width as usize);
-        self.render_cache = Some((index, content.width, content.height, rendered.clone()));
-        rendered
-    }
-
-    fn draw_slide(&mut self, frame: &mut Frame, content: Rect, elapsed: Duration) {
-        // While an exit animation runs, keep drawing the old slide.
-        let index = self.outgoing.as_ref().map_or(self.current, |(i, _)| *i);
-        let RenderedSlide {
-            mut text,
-            images: placements,
-        } = self.rendered_slide(index, content);
 
         // The renderer reserved blank rows for each image; if a renderer
         // change breaks that contract, fail loudly in debug builds
         // instead of drawing pictures over text.
         #[cfg(debug_assertions)]
-        for p in &placements {
-            for line in text.lines.iter().skip(p.line).take(p.height as usize) {
-                debug_assert_eq!(line.width(), 0, "image rows must be blank");
+        for p in &rendered.images {
+            for line in rendered
+                .text
+                .lines
+                .iter()
+                .skip(p.line)
+                .take(p.height as usize)
+            {
+                assert_eq!(line.width(), 0, "image rows must be blank");
             }
         }
 
-        self.apply_highlight(&mut text, content.width as usize);
-        let height = (text.height() as u16).min(content.height);
+        let non_blank: Vec<usize> = rendered
+            .text
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.width() > 0)
+            .map(|(i, _)| i)
+            .collect();
+        let paragraph = Paragraph::new(rendered.text.clone());
+        self.render_cache = Some(RenderCache {
+            index,
+            width: content.width,
+            height: content.height,
+            rendered,
+            paragraph,
+            non_blank,
+        });
+    }
+
+    fn draw_slide(&mut self, frame: &mut Frame, content: Rect, elapsed: Duration) {
+        // While an exit animation runs, keep drawing the old slide.
+        let index = self.outgoing.as_ref().map_or(self.current, |(i, _)| *i);
+        self.ensure_rendered(index, content);
+        let cache = self.render_cache.as_ref().expect("cache was just filled");
+
+        // The highlight cursor indexes the cached non-blank lines; the
+        // count can shrink on resize, so keep it in range.
+        self.highlight_count = cache.non_blank.len();
+        self.highlight = match self.highlight {
+            Some(_) if cache.non_blank.is_empty() => None,
+            Some(pos) => Some(pos.min(cache.non_blank.len() - 1)),
+            None => None,
+        };
+
+        let height = (cache.rendered.text.height() as u16).min(content.height);
         let y = content.y + (content.height - height) / 2;
         let slide_area = Rect::new(content.x, y, content.width, height);
-        frame.render_widget(Paragraph::new(text), slide_area);
 
-        for placement in placements {
+        if let Some(pos) = self.highlight {
+            // Highlighting styles a copy so the cached text stays pristine.
+            let mut text = cache.rendered.text.clone();
+            style_highlight(
+                &self.theme,
+                self.presentation.metadata.highlight,
+                &mut text,
+                content.width as usize,
+                cache.non_blank[pos],
+            );
+            frame.render_widget(Paragraph::new(text), slide_area);
+        } else {
+            frame.render_widget(&cache.paragraph, slide_area);
+        }
+
+        for placement in &cache.rendered.images {
             let Some(protocol) = self.images.protocol_mut(&placement.source) else {
                 continue;
             };
@@ -493,60 +596,6 @@ impl App {
             frame.render_effect(effect, slide_area, elapsed.into());
             if effect.done() {
                 self.effect = None;
-            }
-        }
-    }
-
-    /// Mark the highlighted line so the speaker can point the audience at
-    /// the line being discussed: either an accent bar behind it or by
-    /// dimming everything else, per the `highlight:` metadata key. Blank
-    /// lines are not highlightable; the cursor indexes non-blank lines.
-    fn apply_highlight(&mut self, text: &mut Text<'static>, width: usize) {
-        let non_blank: Vec<usize> = text
-            .lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line.width() > 0)
-            .map(|(i, _)| i)
-            .collect();
-        self.highlight_count = non_blank.len();
-
-        let Some(pos) = self.highlight else {
-            return;
-        };
-        if non_blank.is_empty() {
-            self.highlight = None;
-            return;
-        }
-        // The line count can shrink on resize; keep the cursor in range.
-        let pos = pos.min(non_blank.len() - 1);
-        self.highlight = Some(pos);
-        let target = non_blank[pos];
-        match self.presentation.metadata.highlight {
-            HighlightStyle::Dim => {
-                for (i, line) in text.lines.iter_mut().enumerate() {
-                    if i != target {
-                        line.style = line.style.add_modifier(Modifier::DIM);
-                    }
-                }
-            }
-            HighlightStyle::Bar => {
-                // Repaint the line onto a full-width accent bar. The bar
-                // owns the colors (fg becomes the background color, since
-                // arbitrary foregrounds like syntax colors are unreadable
-                // on the accent); bold/italic and such survive.
-                let bar = Style::default()
-                    .fg(self.theme.background)
-                    .bg(self.theme.accent);
-                let line = &mut text.lines[target];
-                line.style = line.style.patch(bar);
-                for span in &mut line.spans {
-                    span.style = span.style.patch(bar);
-                }
-                let pad = width.saturating_sub(line.width());
-                if pad > 0 {
-                    line.spans.push(Span::styled(" ".repeat(pad), bar));
-                }
             }
         }
     }
@@ -709,7 +758,7 @@ fn default_shell() -> String {
 }
 
 /// First bit of plain text on a slide, for outline labels.
-fn first_text(slide: &crate::markdown::Slide) -> Option<String> {
+fn first_text(slide: &Slide) -> Option<String> {
     slide.blocks.iter().find_map(|b| match b {
         MdBlock::Paragraph(spans) if !spans.is_empty() => {
             Some(spans.iter().map(|s| s.text.as_str()).collect::<String>())
@@ -745,6 +794,7 @@ mod tests {
             },
             Highlighter::new(),
             None,
+            HashMap::new(),
             PlayOptions::default(),
         )
     }
@@ -1174,10 +1224,66 @@ mod tests {
                 loaded("# A\n---\n# B\n"),
                 Highlighter::new(),
                 None,
+                HashMap::new(),
                 PlayOptions { start_slide: start },
             );
             assert_eq!(app.current, expected, "start_slide: {start}");
         }
+    }
+
+    #[test]
+    fn render_cache_serves_stale_content_until_invalidated() {
+        let mut app = test_app("first slide\n---\nsecond slide\n");
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(buffer_text(&terminal).contains("first slide"));
+        let cached = app.render_cache.as_ref().expect("cache filled by draw");
+        assert_eq!((cached.index, cached.width, cached.height), (0, 50, 17));
+
+        // Mutating the slide without invalidation keeps serving the cache.
+        app.presentation.slides[0] = crate::markdown::Slide::parse("CHANGED");
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(
+            buffer_text(&terminal).contains("first slide"),
+            "same slide and size must be a cache hit"
+        );
+
+        // A different terminal size misses and re-renders.
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| app.draw(frame, Duration::ZERO))
+            .unwrap();
+        assert!(buffer_text(&terminal).contains("CHANGED"));
+
+        // Navigating changes the cached index (two frames: the first
+        // draws the outgoing slide's exit animation to completion).
+        press(&mut app, KeyCode::Right);
+        for _ in 0..2 {
+            terminal
+                .draw(|frame| app.draw(frame, Duration::from_secs(1)))
+                .unwrap();
+        }
+        assert_eq!(app.render_cache.as_ref().unwrap().index, 1);
+    }
+
+    #[test]
+    fn reload_clears_the_render_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.keynot");
+        fs_err::write(&path, "# A\n").unwrap();
+        let highlighter = Highlighter::new();
+        let loaded = load(&path, &highlighter).unwrap();
+        let mut app = App::new(
+            path.clone(),
+            loaded,
+            highlighter,
+            None,
+            HashMap::new(),
+            PlayOptions::default(),
+        );
+        draw(&mut app, Duration::ZERO);
+        assert!(app.render_cache.is_some());
+        app.reload();
+        assert!(app.render_cache.is_none(), "reload must invalidate");
     }
 
     #[test]
@@ -1192,6 +1298,7 @@ mod tests {
             loaded,
             highlighter,
             None,
+            HashMap::new(),
             PlayOptions { start_slide: 3 },
         );
         assert_eq!(app.current, 2);
@@ -1215,6 +1322,7 @@ mod tests {
             loaded,
             highlighter,
             None,
+            HashMap::new(),
             PlayOptions::default(),
         );
 

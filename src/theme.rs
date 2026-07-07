@@ -32,18 +32,18 @@ pub enum ThemeError {
 }
 
 impl Theme {
-    /// The Tokyo Night palette: deep indigo background, periwinkle text,
-    /// blue headings, purple accents, cyan links.
+    /// The VS Code Dark+ palette: charcoal background, keyword-blue
+    /// headings, function-yellow accents, comment-green quote bars.
     pub fn dark() -> Self {
         Theme {
-            background: Color::from_u32(0x001a1b26),
-            text: Color::from_u32(0x00c0caf5),
-            heading: Color::from_u32(0x007aa2f7),
-            accent: Color::from_u32(0x00bb9af7),
-            link: Color::from_u32(0x007dcfff),
-            blockquote: Color::from_u32(0x009ece6a),
-            code_background: Color::from_u32(0x0024283b),
-            code_theme: "base16-ocean.dark".to_string(),
+            background: Color::from_u32(0x001e1e1e),
+            text: Color::from_u32(0x00d4d4d4),
+            heading: Color::from_u32(0x00569cd6),
+            accent: Color::from_u32(0x00dcdcaa),
+            link: Color::from_u32(0x003794ff),
+            blockquote: Color::from_u32(0x006a9955),
+            code_background: Color::from_u32(0x00252526),
+            code_theme: "Dark+".to_string(),
         }
     }
 
@@ -126,11 +126,11 @@ mod tests {
 
     #[test]
     fn dark_theme_palette() {
-        // Tokyo Night.
+        // VS Code Dark+.
         let theme = Theme::dark();
-        assert_eq!(theme.background, Color::Rgb(0x1a, 0x1b, 0x26));
-        assert_eq!(theme.heading, Color::Rgb(0x7a, 0xa2, 0xf7));
-        assert_eq!(theme.accent, Color::Rgb(0xbb, 0x9a, 0xf7));
+        assert_eq!(theme.background, Color::Rgb(0x1e, 0x1e, 0x1e));
+        assert_eq!(theme.heading, Color::Rgb(0x56, 0x9c, 0xd6));
+        assert_eq!(theme.accent, Color::Rgb(0xdc, 0xdc, 0xaa));
     }
 
     #[test]

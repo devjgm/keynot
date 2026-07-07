@@ -4,8 +4,6 @@ author: The keynot Authors
 date: 2026-07-07
 theme: dark
 transition: sweep
-colors:
-  accent: '#bb9af7'
 ---
 
 # A Tour of keynot
@@ -93,6 +91,6 @@ this: does not split the slide
 
 ---
 
-# Fin
+# The End
 
 Press `?` for help, `o` for the outline.

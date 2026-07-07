@@ -6,10 +6,10 @@ use keynot::render::Highlighter;
 use keynot::template;
 use std::path::PathBuf;
 
-/// Help colors matching the default dark theme (Tokyo Night): blue
-/// headings, purple command/flag names (see `Theme::dark`).
-const HELP_HEADING: Color = Color::Rgb(RgbColor(0x7a, 0xa2, 0xf7));
-const HELP_ACCENT: Color = Color::Rgb(RgbColor(0xbb, 0x9a, 0xf7));
+/// Help colors matching the default dark theme (VS Code Dark+): blue
+/// headings, yellow command/flag names (see `Theme::dark`).
+const HELP_HEADING: Color = Color::Rgb(RgbColor(0x56, 0x9c, 0xd6));
+const HELP_ACCENT: Color = Color::Rgb(RgbColor(0xdc, 0xdc, 0xaa));
 const HELP_STYLES: Styles = Styles::styled()
     .header(Style::new().bold().fg_color(Some(HELP_HEADING)))
     .usage(Style::new().bold().fg_color(Some(HELP_HEADING)))

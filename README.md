@@ -1,7 +1,16 @@
 # keynot
 
+```text
+________________
+\    keynot    /
+ \____________/
+      |  |
+      |  |
+   ___|__|___
+```
+
 Terminal slide presentations from a single markdown file. Like Keynote,
-but it's not, and it lives in your terminal.
+but it's not, and it lives in your terminal, like you.
 
 - One `.keynot` file per presentation: YAML frontmatter for metadata and
   theming, slides in plain markdown separated by `---`, HTML comments as
@@ -18,7 +27,7 @@ but it's not, and it lives in your terminal.
 ## Install
 
 ```sh
-cargo install --path .
+cargo install --locked keynot
 ```
 
 ## Quick start
@@ -49,7 +58,7 @@ title: My Talk
 author: Ada
 theme: dark
 colors:
-  accent: '#e0af68'
+  accent: '#dcdcaa'
 ---
 
 # My Talk
@@ -95,5 +104,8 @@ cargo clippy --all-targets
 
 The crate is organized as a library plus a thin binary: `markdown/` parses
 `.keynot` files into a small slide AST, `render/` turns the AST into
-styled terminal text, `app.rs` is the interactive player, and `main.rs`
+styled terminal text, `src/app/` is the interactive player, and `main.rs`
 the CLI.
+
+Formatting uses a nightly-only rustfmt option (`group_imports`), so
+format with `cargo +nightly fmt`; CI checks it that way.

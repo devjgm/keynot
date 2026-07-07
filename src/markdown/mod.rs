@@ -21,7 +21,6 @@ mod splitter;
 
 pub use metadata::{ColorOverrides, HighlightStyle, Metadata, Transition};
 pub use slide::{Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide};
-pub use splitter::{RawSlide, SplitResult};
 
 /// A fully parsed presentation.
 #[derive(Debug, Clone, PartialEq)]

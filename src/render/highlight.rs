@@ -16,9 +16,16 @@ pub struct Highlighter {
 
 impl Highlighter {
     pub fn new() -> Self {
+        let mut themes = ThemeSet::load_defaults();
+        // Vendored under assets/ (a plain file, embedded at compile
+        // time): our approximation of VS Code's Dark+ token colors.
+        let dark_plus = include_bytes!("../../assets/dark-plus.tmTheme");
+        let theme = ThemeSet::load_from_reader(&mut std::io::Cursor::new(dark_plus.as_slice()))
+            .expect("embedded Dark+ theme must parse");
+        themes.themes.insert("Dark+".to_string(), theme);
         Highlighter {
             syntaxes: SyntaxSet::load_defaults_newlines(),
-            themes: ThemeSet::load_defaults(),
+            themes,
         }
     }
 
@@ -156,6 +163,7 @@ mod tests {
     fn default_themes_are_available() {
         let h = highlighter();
         assert!(h.has_theme("base16-eighties.dark"));
+        assert!(h.has_theme("Dark+"), "embedded theme is loaded");
         assert!(h.has_theme("InspiredGitHub"));
         assert!(!h.available_themes().is_empty());
     }
@@ -175,6 +183,35 @@ mod tests {
         // Same for the unknown-theme plain path.
         let lines = h.highlight("\tindented\n", None, "no-such-theme");
         assert_eq!(lines[0].to_string(), "    indented");
+    }
+
+    #[test]
+    fn dark_plus_token_colors_are_applied() {
+        // Guards the hand-written tmTheme: a scope typo in that XML would
+        // silently render everything in the plain foreground color.
+        let h = highlighter();
+        let lines = h.highlight("fn main() { let s = \"hi\"; }\n", Some("rust"), "Dark+");
+        let colors: Vec<(String, Option<Color>)> = lines[0]
+            .spans
+            .iter()
+            .map(|s| (s.content.to_string(), s.style.fg))
+            .collect();
+        let color_of = |text: &str| {
+            colors
+                .iter()
+                .find(|(t, _)| t.contains(text))
+                .and_then(|(_, c)| *c)
+        };
+        assert_eq!(
+            color_of("fn"),
+            Some(Color::Rgb(0x56, 0x9C, 0xD6)),
+            "keywords are Dark+ blue; spans: {colors:?}"
+        );
+        assert_eq!(
+            color_of("hi"),
+            Some(Color::Rgb(0xCE, 0x91, 0x78)),
+            "strings are Dark+ sienna; spans: {colors:?}"
+        );
     }
 
     #[test]

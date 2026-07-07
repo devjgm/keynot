@@ -59,13 +59,13 @@ highlight: bar            # speaker line highlight: bar (default) or dim
 code_theme: base16-eighties.dark   # syntect theme for code blocks
 footer: true              # set false to hide the footer entirely
 colors:                   # per-element overrides, applied on top of the theme
-  background: '#1a1b26'
-  text: '#c0caf5'
-  heading: '#7aa2f7'
-  accent: '#e0af68'
-  link: '#7dcfff'
-  blockquote: '#9ece6a'
-  code_background: '#24283b'
+  background: '#1e1e1e'
+  text: '#d4d4d4'
+  heading: '#569cd6'
+  accent: '#dcdcaa'
+  link: '#3794ff'
+  blockquote: '#6a9955'
+  code_background: '#252526'
 ---
 ```
 
@@ -82,8 +82,10 @@ Notes:
 
 | theme   | look                                                            |
 |---------|-----------------------------------------------------------------|
-| `dark`  | Tokyo Night: indigo background, blue headings, purple accents (the default) |
+| `dark`  | VS Code Dark+: charcoal background, blue headings, yellow accents (the default) |
 | `light` | near-white background, dark text                                |
+
+`default` is accepted as an alias for `dark`.
 
 Every color can then be overridden individually under `colors:`. Color
 values accept:
@@ -105,9 +107,9 @@ What each color controls:
 | `code_background` | background of code blocks and inline code       |
 
 `code_theme` selects the syntax-highlighting palette for fenced code
-blocks. Any theme bundled with [syntect](https://github.com/trishume/syntect)
-works, including: `base16-eighties.dark` (dark default), `base16-ocean.dark`,
-`base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub` (light default),
+blocks. `Dark+` (the dark default) ships with keynot; any theme bundled
+with [syntect](https://github.com/trishume/syntect) also works: `base16-eighties.dark`, `base16-ocean.dark`, `base16-mocha.dark`,
+`base16-ocean.light`, `InspiredGitHub` (light default),
 `Solarized (dark)`, and `Solarized (light)`. A typo here is caught by
 `keynot check`, which lists the valid names.
 
@@ -285,7 +287,7 @@ Keys during the show (press `?` anytime for this list):
 | esc                          | clear the line highlight  |
 | `g` / `G`, home / end        | first / last slide        |
 | `o`                          | toggle the outline overview |
-| enter (in outline)           | jump to selected slide    |
+| enter, space (in outline)    | jump to selected slide    |
 | `0`-`9` (in outline)         | type a slide number to select it |
 | esc (in outline)             | back without jumping (clears a typed number first) |
 | `!`                          | open an interactive shell; exiting it resumes the show |

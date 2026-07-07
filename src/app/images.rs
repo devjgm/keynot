@@ -20,15 +20,47 @@ struct ImageEntry {
     rows: u16,
 }
 
-/// Loads and caches slide images. `None` cache entries record files that
-/// failed to load (so we do not retry every frame); a `None` picker means
-/// no graphics support was detected (or the terminal was never probed,
-/// e.g. in tests).
+/// A decoded image, or the reason it could not be loaded.
+pub type Decoded = Result<DynamicImage, String>;
+
+/// Decode every image in the deck: network fetches and file reads. Needs
+/// no terminal, so the player runs it before entering the TUI (a slow
+/// URL then delays startup, never a blank alternate screen).
+pub fn decode_all(slides: &[Slide], base: &Path) -> HashMap<String, Decoded> {
+    let mut decoded = HashMap::new();
+    for slide in slides {
+        for block in &slide.blocks {
+            if let Block::Image { source, .. } = block {
+                decoded
+                    .entry(source.clone())
+                    .or_insert_with(|| read_image(source, base));
+            }
+        }
+    }
+    decoded
+}
+
+/// Does the deck reference any image that must be fetched over HTTP?
+pub fn has_url_images(slides: &[Slide]) -> bool {
+    slides.iter().any(|slide| {
+        slide
+            .blocks
+            .iter()
+            .any(|block| matches!(block, Block::Image { source, .. } if is_url(source)))
+    })
+}
+
+/// Caches slide images as terminal-drawable entries. `None` cache values
+/// record sources that failed to load (so we do not retry every frame);
+/// their reasons queue in `errors` for the player to surface. A `None`
+/// picker means no graphics support was detected (or the terminal was
+/// never probed, e.g. in tests).
 pub struct Images {
     picker: Option<Picker>,
     /// Directory of the .keynot file; relative image paths resolve here.
     base: PathBuf,
     cache: HashMap<String, Option<ImageEntry>>,
+    errors: Vec<String>,
 }
 
 impl Images {
@@ -37,6 +69,14 @@ impl Images {
             picker,
             base,
             cache: HashMap::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// Turn pre-decoded images into drawable entries.
+    pub fn adopt(&mut self, decoded: HashMap<String, Decoded>) {
+        for (source, result) in decoded {
+            self.insert(source, result);
         }
     }
 
@@ -49,8 +89,8 @@ impl Images {
         }
     }
 
-    /// Load every image in the deck up front, so URL fetches happen when
-    /// the presentation starts rather than stalling a mid-talk slide.
+    /// Load every image in the deck (used after reload; startup goes
+    /// through [`decode_all`] + [`Images::adopt`] instead).
     pub fn preload_all(&mut self, slides: &[Slide]) {
         for slide in slides {
             self.preload(slide);
@@ -60,27 +100,47 @@ impl Images {
     /// Forget everything (used on reload, so edited images are re-read).
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.errors.clear();
+    }
+
+    /// Load-failure reasons collected since the last call, oldest first.
+    pub fn take_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.errors)
     }
 
     fn load(&mut self, source: &str) {
         if self.cache.contains_key(source) {
             return;
         }
-        let Some(picker) = &self.picker else {
+        // Without graphics support the image can never draw; skip the
+        // (possibly network-bound) decode entirely.
+        if self.picker.is_none() {
             self.cache.insert(source.to_string(), None);
             return;
-        };
-        let entry = read_image(source, &self.base).map(|img| {
-            let font = picker.font_size();
-            let cols = img.width().div_ceil(u32::from(font.width.max(1))) as u16;
-            let rows = img.height().div_ceil(u32::from(font.height.max(1))) as u16;
-            ImageEntry {
-                protocol: picker.new_resize_protocol(img),
-                cols: cols.max(1),
-                rows: rows.max(1),
+        }
+        let decoded = read_image(source, &self.base);
+        self.insert(source.to_string(), decoded);
+    }
+
+    fn insert(&mut self, source: String, decoded: Decoded) {
+        let entry = match (&self.picker, decoded) {
+            (Some(picker), Ok(img)) => {
+                let font = picker.font_size();
+                let cols = img.width().div_ceil(u32::from(font.width.max(1))) as u16;
+                let rows = img.height().div_ceil(u32::from(font.height.max(1))) as u16;
+                Some(ImageEntry {
+                    protocol: picker.new_resize_protocol(img),
+                    cols: cols.max(1),
+                    rows: rows.max(1),
+                })
             }
-        });
-        self.cache.insert(source.to_string(), entry);
+            (_, Err(reason)) => {
+                self.errors.push(format!("image {source}: {reason}"));
+                None
+            }
+            (None, Ok(_)) => None,
+        };
+        self.cache.insert(source, entry);
     }
 
     /// The cell size an image should occupy within `max`, keeping aspect.
@@ -100,18 +160,18 @@ impl Images {
 }
 
 /// Read and decode an image from an `http(s)` URL or a filesystem path
-/// (relative paths resolve against `base`). `None` on any failure; the
-/// renderer shows a placeholder instead.
-fn read_image(source: &str, base: &Path) -> Option<DynamicImage> {
+/// (relative paths resolve against `base`). The error is a human-readable
+/// reason; the renderer shows a placeholder for failed images.
+fn read_image(source: &str, base: &Path) -> Decoded {
     if is_url(source) {
-        fetch_image(source).ok()
+        fetch_image(source).map_err(|err| err.to_string())
     } else {
         let path = if Path::new(source).is_absolute() {
             PathBuf::from(source)
         } else {
             base.join(source)
         };
-        image::open(path).ok()
+        image::open(path).map_err(|err| err.to_string())
     }
 }
 

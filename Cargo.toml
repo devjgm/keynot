@@ -2,12 +2,14 @@
 name = "keynot"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 description = "Terminal slide presentations from a single markdown file"
 repository = "https://github.com/devjgm/keynot"
 license = "MIT"
 keywords = ["presentation", "slides", "markdown", "terminal", "tui"]
 categories = ["command-line-utilities", "visualization"]
+# Repo-only files; keeps the published package lean.
+exclude = [".github/", ".gitattributes", "rustfmt.toml"]
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
