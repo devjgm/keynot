@@ -30,8 +30,6 @@ pub struct PlayOptions {
     pub start_slide: usize,
     /// How to draw images.
     pub images: ImageMode,
-    /// Show pressed keys in the footer (for demo recordings).
-    pub show_keys: bool,
 }
 
 /// How the player draws images, from `play --images`.
@@ -132,35 +130,6 @@ struct RenderCache {
     non_blank: Vec<usize>,
 }
 
-/// How long a pressed key stays visible in the footer (`--show-keys`).
-const KEY_CHIP_TTL: Duration = Duration::from_secs(2);
-
-/// A short ASCII label for a pressed key, for the `--show-keys` chips.
-fn key_label(key: &KeyEvent) -> String {
-    let base = match key.code {
-        KeyCode::Char(' ') => "space".to_string(),
-        KeyCode::Char(c) => c.to_string(),
-        KeyCode::Right => "right".to_string(),
-        KeyCode::Left => "left".to_string(),
-        KeyCode::Up => "up".to_string(),
-        KeyCode::Down => "down".to_string(),
-        KeyCode::Enter => "enter".to_string(),
-        KeyCode::Esc => "esc".to_string(),
-        KeyCode::Tab => "tab".to_string(),
-        KeyCode::Backspace => "bksp".to_string(),
-        KeyCode::PageUp => "pgup".to_string(),
-        KeyCode::PageDown => "pgdn".to_string(),
-        KeyCode::Home => "home".to_string(),
-        KeyCode::End => "end".to_string(),
-        other => format!("{other:?}").to_lowercase(),
-    };
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        format!("ctrl-{base}")
-    } else {
-        base
-    }
-}
-
 /// Style the line at `target` per the `highlight:` metadata key: an
 /// accent bar behind it, or dimming everything else.
 fn style_highlight(
@@ -219,11 +188,6 @@ struct App {
     highlight_count: usize,
     /// Set by the `!` key: drop to an interactive shell on the next tick.
     shell_requested: bool,
-    /// Show pressed keys in the footer (`--show-keys`).
-    show_keys: bool,
-    /// Recently pressed keys and when, newest last; drawn as footer
-    /// chips and pruned as they pass [`KEY_CHIP_TTL`].
-    recent_keys: std::collections::VecDeque<(String, Instant)>,
     /// Effect running on the incoming (current) slide.
     effect: Option<Effect>,
     /// Exit animation still playing on the slide being navigated away
@@ -271,8 +235,6 @@ impl App {
             highlight: None,
             highlight_count: 0,
             shell_requested: false,
-            show_keys: options.show_keys,
-            recent_keys: std::collections::VecDeque::new(),
             effect: None,
             outgoing: None,
             pending_enter: None,
@@ -288,9 +250,6 @@ impl App {
             terminal.draw(|frame| self.draw(frame, elapsed))?;
             let timeout = if self.effect.is_some() || self.outgoing.is_some() {
                 Duration::from_millis(16)
-            } else if !self.recent_keys.is_empty() {
-                // Redraw soon so key chips fade out on time.
-                Duration::from_millis(250)
             } else {
                 Duration::from_millis(500)
             };
@@ -343,13 +302,6 @@ impl App {
 
     /// Handle a key press; returns true to quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if self.show_keys {
-            self.recent_keys
-                .push_back((key_label(&key), Instant::now()));
-            while self.recent_keys.len() > 4 {
-                self.recent_keys.pop_front();
-            }
-        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
@@ -709,7 +661,7 @@ impl App {
         frame.render_widget(Paragraph::new(Text::from(lines)), content);
     }
 
-    fn draw_footer(&mut self, frame: &mut Frame, footer: Rect) {
+    fn draw_footer(&self, frame: &mut Frame, footer: Rect) {
         if self.presentation.metadata.footer == Some(false) {
             return;
         }
@@ -750,31 +702,6 @@ impl App {
         frame.render_widget(Paragraph::new(left), footer);
         frame.render_widget(
             Paragraph::new(Line::styled(right, dim)).alignment(Alignment::Right),
-            footer,
-        );
-        // Last, so the chips win any overlap on narrow terminals.
-        self.draw_key_chips(frame, footer);
-    }
-
-    /// The `--show-keys` display: recently pressed keys as keycap chips,
-    /// centered in the footer.
-    fn draw_key_chips(&mut self, frame: &mut Frame, footer: Rect) {
-        self.recent_keys
-            .retain(|(_, at)| at.elapsed() < KEY_CHIP_TTL);
-        if self.recent_keys.is_empty() {
-            return;
-        }
-        let chip = Style::default()
-            .fg(self.theme.background)
-            .bg(self.theme.accent);
-        let mut spans = Vec::new();
-        for (label, _) in &self.recent_keys {
-            spans.push(Span::styled(format!(" {label} "), chip));
-            spans.push(Span::raw(" "));
-        }
-        spans.pop();
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
             footer,
         );
     }
@@ -1321,53 +1248,10 @@ mod tests {
                 PlayOptions {
                     start_slide: start,
                     images: ImageMode::Auto,
-                    show_keys: false,
                 },
             );
             assert_eq!(app.current, expected, "start_slide: {start}");
         }
-    }
-
-    #[test]
-    fn key_labels_are_short_ascii() {
-        let label = |code| key_label(&KeyEvent::new(code, KeyModifiers::NONE));
-        assert_eq!(label(KeyCode::Right), "right");
-        assert_eq!(label(KeyCode::Char(' ')), "space");
-        assert_eq!(label(KeyCode::Char('o')), "o");
-        assert_eq!(label(KeyCode::Esc), "esc");
-        assert_eq!(
-            key_label(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            "ctrl-c"
-        );
-    }
-
-    #[test]
-    fn show_keys_renders_footer_chips_and_fades() {
-        let mut app = test_app("# A\n---\n# B\n");
-        app.show_keys = true;
-        press(&mut app, KeyCode::Right);
-        press(&mut app, KeyCode::Char('o'));
-        let terminal = draw(&mut app, Duration::ZERO);
-        let screen = buffer_text(&terminal);
-        assert!(screen.contains(" right "), "screen:\n{screen}");
-        assert!(screen.contains(" o "), "screen:\n{screen}");
-
-        // Past the TTL the chips disappear.
-        for (_, at) in &mut app.recent_keys {
-            *at = Instant::now() - KEY_CHIP_TTL;
-        }
-        let terminal = draw(&mut app, Duration::ZERO);
-        assert!(!buffer_text(&terminal).contains(" right "));
-        assert!(app.recent_keys.is_empty(), "expired chips are pruned");
-    }
-
-    #[test]
-    fn keys_are_not_shown_by_default() {
-        let mut app = test_app("# A\n---\n# B\n");
-        press(&mut app, KeyCode::Right);
-        let terminal = draw(&mut app, Duration::ZERO);
-        assert!(!buffer_text(&terminal).contains(" right "));
-        assert!(app.recent_keys.is_empty());
     }
 
     #[test]
@@ -1441,7 +1325,6 @@ mod tests {
             PlayOptions {
                 start_slide: 3,
                 images: ImageMode::Auto,
-                show_keys: false,
             },
         );
         assert_eq!(app.current, 2);

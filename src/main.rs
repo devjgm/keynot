@@ -40,9 +40,6 @@ enum Command {
         /// How to draw images: the terminal's best protocol, textual half-blocks, or not at all
         #[arg(long, value_enum, default_value_t)]
         images: ImageMode,
-        /// Show pressed keys in the footer (for demo recordings)
-        #[arg(long)]
-        show_keys: bool,
     },
     /// Create a new skeleton presentation
     New {
@@ -65,13 +62,11 @@ fn main() -> Result<()> {
             file,
             start_slide,
             images,
-            show_keys,
         } => app::play(
             &file,
             PlayOptions {
                 start_slide,
                 images,
-                show_keys,
             },
         ),
         Command::New { file, force } => new(file, force),

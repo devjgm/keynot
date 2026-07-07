@@ -276,21 +276,12 @@ renders).
 keynot play talk.keynot                     # start at slide 1
 keynot play --start-slide 7 talk.keynot     # resume where you left off
 keynot play --images halfblocks talk.keynot # textual images (recordings)
-keynot play --show-keys talk.keynot         # show pressed keys (recordings)
 ```
 
 `--images halfblocks` draws pictures as colored half-block cells instead
 of the terminal's native graphics protocol. Native graphics look better
 live, but only half-blocks survive asciinema recordings and GIF renders;
 `--images off` shows placeholders instead.
-
-`--show-keys` displays recently pressed keys as chips in the footer,
-fading after a couple of seconds -- made for narrating demo recordings:
-
-```
-asciinema rec demo.cast
-keynot play --show-keys --images halfblocks talk.keynot
-```
 
 Keys during the show (press `?` anytime for this list):
 
