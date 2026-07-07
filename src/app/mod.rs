@@ -79,11 +79,9 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     let loaded = load(path, &highlighter)?;
 
     // Fetch and decode images before entering the TUI, so a slow network
-    // delays startup visibly instead of freezing a blank screen.
+    // delays startup at the shell prompt instead of freezing a blank
+    // alternate screen.
     let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    if images::has_url_images(&loaded.presentation.slides) {
-        println!("keynot: fetching images...");
-    }
     let decoded = images::decode_all(&loaded.presentation.slides, &base);
 
     let mut terminal = ratatui::init();

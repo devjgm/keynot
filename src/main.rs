@@ -37,8 +37,7 @@ enum Command {
         /// Start at slide N (1-based)
         #[arg(long, value_name = "N", default_value_t = 1)]
         start_slide: usize,
-        /// How to draw images: the terminal's best protocol, textual
-        /// half-blocks (survives asciinema recordings), or not at all
+        /// How to draw images: the terminal's best protocol, textual half-blocks, or not at all
         #[arg(long, value_enum, default_value_t)]
         images: ImageMode,
     },

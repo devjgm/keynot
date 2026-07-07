@@ -40,16 +40,6 @@ pub fn decode_all(slides: &[Slide], base: &Path) -> HashMap<String, Decoded> {
     decoded
 }
 
-/// Does the deck reference any image that must be fetched over HTTP?
-pub fn has_url_images(slides: &[Slide]) -> bool {
-    slides.iter().any(|slide| {
-        slide
-            .blocks
-            .iter()
-            .any(|block| matches!(block, Block::Image { source, .. } if is_url(source)))
-    })
-}
-
 /// Caches slide images as terminal-drawable entries. `None` cache values
 /// record sources that failed to load (so we do not retry every frame);
 /// their reasons queue in `errors` for the player to surface. A `None`
