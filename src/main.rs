@@ -1,7 +1,7 @@
 use clap::builder::styling::{Color, RgbColor, Style, Styles};
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr, bail};
-use keynot::app::{self, PlayOptions};
+use keynot::app::{self, ImageMode, PlayOptions};
 use keynot::render::Highlighter;
 use keynot::template;
 use std::path::PathBuf;
@@ -37,6 +37,10 @@ enum Command {
         /// Start at slide N (1-based)
         #[arg(long, value_name = "N", default_value_t = 1)]
         start_slide: usize,
+        /// How to draw images: the terminal's best protocol, textual
+        /// half-blocks (survives asciinema recordings), or not at all
+        #[arg(long, value_enum, default_value_t)]
+        images: ImageMode,
     },
     /// Create a new skeleton presentation
     New {
@@ -55,7 +59,17 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Play { file, start_slide } => app::play(&file, PlayOptions { start_slide }),
+        Command::Play {
+            file,
+            start_slide,
+            images,
+        } => app::play(
+            &file,
+            PlayOptions {
+                start_slide,
+                images,
+            },
+        ),
         Command::New { file, force } => new(file, force),
         Command::Check { file } => check(file),
     }

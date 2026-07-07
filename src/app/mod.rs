@@ -28,6 +28,21 @@ use tachyonfx::{Effect, EffectRenderer};
 pub struct PlayOptions {
     /// 1-based slide to start on (0 or 1 both mean the first slide).
     pub start_slide: usize,
+    /// How to draw images.
+    pub images: ImageMode,
+}
+
+/// How the player draws images, from `play --images`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum ImageMode {
+    /// The best protocol the terminal supports.
+    #[default]
+    Auto,
+    /// Textual half-block cells only. Unlike kitty/iTerm2/sixel
+    /// graphics, these survive asciinema recordings and GIF renders.
+    Halfblocks,
+    /// Placeholders instead of pictures.
+    Off,
 }
 
 /// Everything `load` validates and resolves for a presentation file.
@@ -75,7 +90,14 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     // Probe the terminal for its graphics protocol and font size. This
     // should run after terminal init; ratatui-image manages raw mode for
     // its own stdio query round-trip.
-    let picker = Picker::from_query_stdio().ok();
+    let picker = match options.images {
+        ImageMode::Off => None,
+        ImageMode::Auto => Picker::from_query_stdio().ok(),
+        ImageMode::Halfblocks => Picker::from_query_stdio().ok().map(|mut picker| {
+            picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks);
+            picker
+        }),
+    };
     let mut app = App::new(
         path.to_path_buf(),
         loaded,
@@ -1225,7 +1247,10 @@ mod tests {
                 Highlighter::new(),
                 None,
                 HashMap::new(),
-                PlayOptions { start_slide: start },
+                PlayOptions {
+                    start_slide: start,
+                    images: ImageMode::Auto,
+                },
             );
             assert_eq!(app.current, expected, "start_slide: {start}");
         }
@@ -1299,7 +1324,10 @@ mod tests {
             highlighter,
             None,
             HashMap::new(),
-            PlayOptions { start_slide: 3 },
+            PlayOptions {
+                start_slide: 3,
+                images: ImageMode::Auto,
+            },
         );
         assert_eq!(app.current, 2);
 
