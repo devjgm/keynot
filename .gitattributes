@@ -1,0 +1,4 @@
+# Check out all text files with LF everywhere (notably Windows), so
+# include_str! contents and test fixtures are byte-identical across
+# platforms.
+* text=auto eol=lf

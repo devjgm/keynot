@@ -1,14 +1,12 @@
 //! Loading, caching, and sizing of slide images.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
+use crate::markdown::{Block, Slide};
 use image::DynamicImage;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
-
-use crate::markdown::{Block, Slide};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// How long a URL image fetch may take before giving up. Images are
 /// fetched once, when the presentation starts.
@@ -121,7 +119,7 @@ fn is_url(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
 }
 
-fn fetch_image(url: &str) -> anyhow::Result<DynamicImage> {
+fn fetch_image(url: &str) -> eyre::Result<DynamicImage> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(FETCH_TIMEOUT))
         .build()

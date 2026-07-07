@@ -1,0 +1,4 @@
+# Merge std/external/crate imports into a single block per file.
+# This option is nightly-only: format with `cargo +nightly fmt`
+# (stable rustfmt warns and otherwise formats normally).
+group_imports = "One"

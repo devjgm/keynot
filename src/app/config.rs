@@ -2,10 +2,9 @@
 //! effects a [`Transition`] produces. The enums themselves live in
 //! [`crate::markdown::metadata`] so the parser validates them.
 
-use tachyonfx::{Effect, EffectTimer, Interpolation, Motion, fx};
-
 use crate::markdown::Transition;
 use crate::theme::Theme;
+use tachyonfx::{Effect, EffectTimer, Interpolation, Motion, fx};
 
 /// Effects for a slide change. Only some transitions animate the outgoing
 /// slide.

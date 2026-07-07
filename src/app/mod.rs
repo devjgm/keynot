@@ -3,11 +3,13 @@
 mod config;
 mod images;
 
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result, bail};
+use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Transition};
+use crate::render::{Highlighter, RenderContext, RenderedSlide, render_slide};
+use crate::theme::Theme;
+use config::TransitionEffects;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use eyre::{Result, WrapErr, bail};
+use images::Images;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
@@ -16,15 +18,10 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui_image::StatefulImage;
 use ratatui_image::picker::Picker;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tachyonfx::Effect;
 use tachyonfx::EffectRenderer;
-
-use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Transition};
-use crate::render::{Highlighter, RenderContext, RenderedSlide, render_slide};
-use crate::theme::Theme;
-
-use config::TransitionEffects;
-use images::Images;
 
 /// Options for `keynot play`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -44,9 +41,9 @@ pub struct LoadedPresentation {
 /// code theme name. Used by `play` and `check`.
 pub fn load(path: &Path, highlighter: &Highlighter) -> Result<LoadedPresentation> {
     let source =
-        fs_err::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let presentation =
-        Presentation::parse(&source).with_context(|| format!("cannot parse {}", path.display()))?;
+        fs_err::read_to_string(path).wrap_err_with(|| format!("cannot read {}", path.display()))?;
+    let presentation = Presentation::parse(&source)
+        .wrap_err_with(|| format!("cannot parse {}", path.display()))?;
     let theme = Theme::from_metadata(&presentation.metadata)?;
     if !highlighter.has_theme(&theme.code_theme) {
         bail!(
@@ -213,7 +210,7 @@ impl App {
         *terminal = ratatui::init();
         terminal.clear()?;
         self.last_frame = Instant::now();
-        status.with_context(|| format!("cannot run {shell}"))?;
+        status.wrap_err_with(|| format!("cannot run {shell}"))?;
         Ok(())
     }
 
@@ -736,7 +733,6 @@ const ASCII_BORDER: border::Set = border::Set {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

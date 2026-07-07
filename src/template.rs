@@ -2,23 +2,45 @@
 //! example (embedded at compile time), personalized with the new file's
 //! title.
 
+use crate::markdown::Presentation;
+
 /// The tour example, embedded so `keynot new` works from any directory
 /// and always matches the documented feature set.
 const TOUR: &str = include_str!("../examples/tour.keynot");
 
-/// The starter presentation: the tour, with its title (frontmatter and
+/// The starter presentation: the tour with its title (frontmatter and
 /// title slide) replaced by `title`, a placeholder author, and the date
 /// dropped.
+///
+/// The values to replace are read from the tour's own parsed metadata
+/// rather than hardcoded, so editing the tour cannot silently break
+/// this personalization; if a field disappears from the tour its
+/// replacement is simply skipped.
 pub fn skeleton(title: &str) -> String {
-    TOUR.replace("A Tour of keynot", title)
-        .replacen("author: The keynot Authors\n", "author: Your Name\n", 1)
-        .replacen("date: 2026-07-07\n", "", 1)
+    // Normalize first: a CRLF checkout (Windows) would otherwise defeat
+    // the line-exact replacements below.
+    let tour = TOUR.replace("\r\n", "\n");
+    let metadata = Presentation::parse(&tour)
+        .expect("embedded tour example must parse")
+        .metadata;
+
+    let mut out = tour;
+    if let Some(tour_title) = &metadata.title {
+        // Replace everywhere: the frontmatter and the title slide.
+        out = out.replace(tour_title, title);
+    }
+    if let Some(author) = &metadata.author {
+        out = out.replacen(&format!("author: {author}\n"), "author: Your Name\n", 1);
+    }
+    if let Some(date) = &metadata.date {
+        out = out.replacen(&format!("date: {date}\n"), "", 1);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::Presentation;
 
     #[test]
     fn skeleton_parses_cleanly() {
@@ -27,19 +49,35 @@ mod tests {
         assert_eq!(p.metadata.title.as_deref(), Some("Demo Talk"));
         assert_eq!(p.metadata.author.as_deref(), Some("Your Name"));
         assert_eq!(p.metadata.date, None);
-        assert_eq!(p.slides.len(), 8);
+        assert!(!p.slides.is_empty());
     }
 
-    /// If these fail, the tour's frontmatter changed and the replacement
-    /// markers in [`skeleton`] need updating to match.
     #[test]
-    fn tour_placeholders_are_fully_replaced() {
+    fn tour_personalization_is_complete() {
+        let tour_metadata = Presentation::parse(TOUR).unwrap().metadata;
+        let tour_title = tour_metadata.title.expect("tour has a title");
+        let tour_author = tour_metadata.author.expect("tour has an author");
+
         let src = skeleton("Demo Talk");
-        assert!(!src.contains("A Tour of keynot"));
-        assert!(!src.contains("The keynot Authors"));
-        assert!(!src.contains("date:"));
+        assert!(!src.contains(&tour_title), "tour title must be replaced");
+        assert!(!src.contains(&tour_author), "tour author must be replaced");
+        assert!(!src.contains("date:"), "tour date must be dropped");
         // The title lands on the title slide too, not just the metadata.
         assert!(src.contains("# Demo Talk"));
+    }
+
+    /// The replacements assume the tour's frontmatter fields are plain,
+    /// single-line, unquoted scalars; this pins that assumption.
+    #[test]
+    fn tour_frontmatter_fields_are_plain_scalars() {
+        let metadata = Presentation::parse(TOUR).unwrap().metadata;
+        for value in [metadata.title, metadata.author, metadata.date] {
+            let value = value.expect("tour sets title, author, and date");
+            assert!(
+                TOUR.contains(&format!(": {value}\n")),
+                "field value {value:?} must appear as a plain scalar line"
+            );
+        }
     }
 
     #[test]

@@ -5,11 +5,9 @@
 //! accept anything ratatui's `Color::from_str` understands: hex strings
 //! (`#rrggbb`), ANSI names (`red`, `lightcyan`), or indexed colors (`42`).
 
-use std::str::FromStr;
-
-use ratatui::style::Color;
-
 use crate::markdown::Metadata;
+use ratatui::style::Color;
+use std::str::FromStr;
 
 /// Resolved colors and code theme for a presentation.
 #[derive(Debug, Clone, PartialEq)]

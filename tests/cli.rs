@@ -57,7 +57,7 @@ fn new_refuses_to_overwrite() {
         .failure()
         .stderr_eq(str![[r#"
 Error: [..]talk.keynot already exists (use --force to overwrite)
-
+...
 "#]]);
     assert_eq!(fs_err::read_to_string(&file).unwrap(), "precious");
 
@@ -119,7 +119,7 @@ fn check_fails_on_bad_frontmatter() {
 Error: cannot parse [..]bad.keynot
 
 Caused by:
-    0: invalid frontmatter: [..]
+   0: invalid frontmatter: [..]
 ...
 "#]]);
 }
@@ -140,7 +140,7 @@ Error: cannot parse [..]bad.keynot
 
 Caused by:
     unterminated frontmatter: the leading `---` needs a closing `---`
-
+...
 "#]]);
 }
 
@@ -157,7 +157,7 @@ fn check_fails_on_unknown_theme() {
         .failure()
         .stderr_eq(str![[r#"
 Error: unknown theme `neon` (available: dark, light)
-
+...
 "#]]);
 }
 
@@ -174,7 +174,7 @@ fn check_fails_on_unknown_code_theme() {
         .failure()
         .stderr_eq(str![[r#"
 Error: unknown code_theme `nope` (available: [..])
-
+...
 "#]]);
 }
 
@@ -193,7 +193,7 @@ fn check_fails_on_unknown_highlight_style() {
 Error: cannot parse [..]t.keynot
 
 Caused by:
-    0: invalid frontmatter: highlight: unknown variant `sparkles`, expected `bar` or `dim` at line 1 column 12
+   0: invalid frontmatter: highlight: unknown variant `sparkles`, expected `bar` or `dim` at line 1 column 12
 ...
 "#]]);
 }
@@ -213,7 +213,7 @@ fn check_fails_on_unknown_transition() {
 Error: cannot parse [..]t.keynot
 
 Caused by:
-    0: invalid frontmatter: transition: unknown variant `spiral`, expected one of `slide`, `coalesce`, `fade`, `sweep`, `none` at line 1 column 13
+   0: invalid frontmatter: transition: unknown variant `spiral`, expected one of `slide`, `coalesce`, `fade`, `sweep`, `none` at line 1 column 13
 ...
 "#]]);
 }
@@ -234,7 +234,7 @@ Error: cannot parse [..]empty.keynot
 
 Caused by:
     the file contains no slides
-
+...
 "#]]);
 }
 
@@ -270,6 +270,9 @@ fn help_lists_subcommands() {
         .stdout_eq(str![[r#"
 Terminal slide presentations from markdown
 
+    keynot new my-talk.keynot  # Then edit the markdown in the file
+    keynot play my-talk.keynot
+
 Usage: keynot <COMMAND>
 
 Commands:
@@ -279,8 +282,11 @@ Commands:
   help   Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 
 "#]]);
 }

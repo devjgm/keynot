@@ -1,18 +1,28 @@
-use std::path::PathBuf;
-
-use anyhow::{Context, Result, bail};
+use clap::builder::styling::{Color, RgbColor, Style, Styles};
 use clap::{Parser, Subcommand};
-
+use eyre::{Result, WrapErr, bail};
 use keynot::app::{self, PlayOptions};
 use keynot::render::Highlighter;
 use keynot::template;
+use std::path::PathBuf;
 
+/// Help colors matching the default dark theme: blue headings, amber
+/// command/flag names (see `Theme::dark`).
+const HELP_HEADING: Color = Color::Rgb(RgbColor(0x4d, 0x9f, 0xff));
+const HELP_ACCENT: Color = Color::Rgb(RgbColor(0xf7, 0xb5, 0x00));
+const HELP_STYLES: Styles = Styles::styled()
+    .header(Style::new().bold().fg_color(Some(HELP_HEADING)))
+    .usage(Style::new().bold().fg_color(Some(HELP_HEADING)))
+    .literal(Style::new().fg_color(Some(HELP_ACCENT)))
+    .placeholder(Style::new().dimmed());
+
+/// Terminal slide presentations from markdown
+///
+///     keynot new my-talk.keynot  # Then edit the markdown in the file
+///     keynot play my-talk.keynot
+///
 #[derive(Parser)]
-#[command(
-    name = "keynot",
-    version,
-    about = "Terminal slide presentations from markdown"
-)]
+#[command(name = "keynot", version, verbatim_doc_comment, styles = HELP_STYLES)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -33,7 +43,7 @@ enum Command {
         /// Path of the file to create (e.g. talk.keynot)
         file: PathBuf,
         /// Overwrite the file if it already exists
-        #[arg(long)]
+        #[arg(short, long)]
         force: bool,
     },
     /// Validate a presentation and print a summary
@@ -64,7 +74,7 @@ fn new(file: PathBuf, force: bool) -> Result<()> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "My Presentation".to_string());
     fs_err::write(&file, template::skeleton(&title))
-        .with_context(|| format!("cannot write {}", file.display()))?;
+        .wrap_err_with(|| format!("cannot write {}", file.display()))?;
     println!("Created {}", file.display());
     println!("Play it with: keynot play {}", file.display());
     Ok(())

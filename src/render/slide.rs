@@ -1,13 +1,11 @@
 //! Turns a parsed [`Slide`] into styled ratatui text.
 
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-
-use crate::markdown::{Block, InlineSpan, ListBlock, Slide};
-use crate::theme::Theme;
-
 use super::highlight::Highlighter;
 use super::wrap::{spans_width, wrap_spans};
+use crate::markdown::{Block, InlineSpan, ListBlock, Slide};
+use crate::theme::Theme;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 
 /// Returns the (columns, rows) an image should occupy, or `None` to
 /// render a text placeholder instead.

@@ -10,11 +10,11 @@ keywords = ["presentation", "slides", "markdown", "terminal", "tui"]
 categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
-anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
 # Must stay in lockstep with the crossterm version ratatui's `crossterm`
 # feature uses, or two incompatible crossterm versions end up in the build.
 crossterm = "0.29.0"
+eyre = "0.6.12"
 fs-err = "3.3.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
