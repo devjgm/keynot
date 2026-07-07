@@ -1,0 +1,98 @@
+---
+title: A Tour of keynot
+author: The keynot Authors
+date: 2026-07-07
+theme: dark
+transition: sweep
+colors:
+  accent: '#e0af68'
+---
+
+# A Tour of keynot
+
+Everything the format supports, one slide at a time
+
+<!-- Welcome everyone. This note is only visible in the source. -->
+
+---
+
+## Inline styles
+
+Mix **bold**, *italic*, ~~strikethrough~~, <u>underline</u>, and
+`inline code` freely -- even ***together***.
+
+Links look like this: [ratatui](https://ratatui.rs).
+
+Force a line break<br>with the br tag.
+
+---
+
+## Lists
+
+- Plain bullets
+- Nested bullets
+  - Two spaces of indent
+  - As deep as you like
+    - Really
+- Ordered too:
+  1. First
+  2. Second
+- [x] Task lists render their checkboxes
+- [ ] Like so
+
+---
+
+## Code
+
+```rust
+/// Fenced blocks get syntax highlighting.
+fn fib(n: u64) -> u64 {
+    match n {
+        0 | 1 => n,
+        _ => fib(n - 1) + fib(n - 2),
+    }
+}
+```
+
+```python
+print("many languages work")
+```
+
+---
+
+## Quotes and rules
+
+> A blockquote renders italic behind a bar.
+> > And they nest.
+
+***
+
+That rule above is three stars, since `---` separates slides.
+
+---
+
+## Images
+
+An image alone on its line renders as a real picture (kitty, iTerm2,
+sixel, or half-block cells, depending on your terminal). Local paths and
+URLs both work; URLs are fetched when the presentation starts:
+
+![Ferris, the Rust mascot](https://rustacean.net/assets/rustacean-flat-happy.png)
+
+Inline images like ![this one](ferris.png) show a placeholder.
+
+---
+
+## A --- inside code is safe
+
+```yaml
+---
+this: does not split the slide
+---
+```
+
+---
+
+# Fin
+
+Press `?` for help, `o` for the outline.
