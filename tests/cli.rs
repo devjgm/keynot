@@ -248,7 +248,7 @@ fn check_fails_on_unknown_transition() {
 Error: cannot parse [..]t.keynot
 
 Caused by:
-   0: invalid frontmatter: transition: unknown variant `spiral`, expected one of `slide`, `coalesce`, `fade`, `sweep`, `none` at line 1 column 13
+   0: invalid frontmatter: transition: unknown variant `spiral`, expected one of `coalesce`, `slide`, `fade`, `sweep`, `none` at line 1 column 13
 ...
 "#]]);
 }
