@@ -30,12 +30,30 @@ pub fn decode_all(slides: &[Slide], base: &Path) -> HashMap<String, Decoded> {
     let mut decoded = HashMap::new();
     for slide in slides {
         for block in &slide.blocks {
-            if let Block::Image { source, .. } = block {
-                decoded
-                    .entry(source.clone())
-                    .or_insert_with(|| read_image(source, base));
+            if let Block::Image { source, .. } = block
+                && !decoded.contains_key(source)
+            {
+                decoded.insert(source.clone(), decode_logged(source, base));
             }
         }
+    }
+    decoded
+}
+
+/// [`read_image`] with the outcome traced: what decoded (dimensions,
+/// duration) or why it failed.
+fn decode_logged(source: &str, base: &Path) -> Decoded {
+    let started = std::time::Instant::now();
+    let decoded = read_image(source, base);
+    match &decoded {
+        Ok(img) => tracing::debug!(
+            source,
+            width = img.width(),
+            height = img.height(),
+            elapsed = ?started.elapsed(),
+            "decoded image"
+        ),
+        Err(reason) => tracing::warn!(source, reason, "image failed to load"),
     }
     decoded
 }
@@ -108,7 +126,7 @@ impl Images {
             self.cache.insert(source.to_string(), None);
             return;
         }
-        let decoded = read_image(source, &self.base);
+        let decoded = decode_logged(source, &self.base);
         self.insert(source.to_string(), decoded);
     }
 
@@ -170,6 +188,7 @@ fn is_url(source: &str) -> bool {
 }
 
 fn fetch_image(url: &str) -> eyre::Result<DynamicImage> {
+    tracing::debug!(url, "fetching image over http");
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(FETCH_TIMEOUT))
         .build()

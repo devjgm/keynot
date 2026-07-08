@@ -111,3 +111,9 @@ the CLI.
 
 Formatting uses a nightly-only rustfmt option (`group_imports`), so
 format with `cargo +nightly fmt`; CI checks it that way.
+
+For diagnostics, set `KEYNOT_LOG` to a
+[tracing filter](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+(e.g. `KEYNOT_LOG=debug`) and keynot writes a `keynot.log` in the current
+directory: the graphics protocol the terminal negotiated, image fetches
+and failures, render timings, and (at `trace`) every keypress.

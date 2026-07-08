@@ -105,6 +105,41 @@ fn check_validates_the_shipped_example() {
 }
 
 #[test]
+fn keynot_log_writes_a_trace_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.keynot");
+    fs_err::write(&file, "# One\n---\n# Two\n").unwrap();
+
+    keynot()
+        .current_dir(dir.path())
+        .env("KEYNOT_LOG", "debug")
+        .arg("check")
+        .arg(&file)
+        .assert()
+        .success();
+
+    let log = fs_err::read_to_string(dir.path().join("keynot.log")).unwrap();
+    assert!(log.contains("keynot starting"), "log:\n{log}");
+    assert!(log.contains("loaded presentation"), "log:\n{log}");
+    assert!(log.contains("slides=2"), "log:\n{log}");
+}
+
+#[test]
+fn no_log_file_without_the_env_var() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.keynot");
+    fs_err::write(&file, "# One\n").unwrap();
+
+    keynot()
+        .current_dir(dir.path())
+        .arg("check")
+        .arg(&file)
+        .assert()
+        .success();
+    assert!(!dir.path().join("keynot.log").exists());
+}
+
+#[test]
 fn check_fails_on_bad_frontmatter() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bad.keynot");

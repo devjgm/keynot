@@ -67,6 +67,14 @@ pub fn load(path: &Path, highlighter: &Highlighter) -> Result<LoadedPresentation
             highlighter.available_themes().join(", ")
         );
     }
+    tracing::info!(
+        path = %path.display(),
+        slides = presentation.slides.len(),
+        theme = presentation.metadata.theme.as_deref().unwrap_or("dark"),
+        transition = ?presentation.metadata.transition,
+        code_theme = theme.code_theme,
+        "loaded presentation"
+    );
     Ok(LoadedPresentation {
         presentation,
         theme,
@@ -90,8 +98,8 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     // its own stdio query round-trip.
     let picker = match options.images {
         ImageMode::Off => None,
-        ImageMode::Auto => Picker::from_query_stdio().ok(),
-        ImageMode::Halfblocks => Picker::from_query_stdio().ok().map(|mut picker| {
+        ImageMode::Auto => probe_graphics(),
+        ImageMode::Halfblocks => probe_graphics().map(|mut picker| {
             picker.set_protocol_type(ratatui_image::picker::ProtocolType::Halfblocks);
             picker
         }),
@@ -109,6 +117,25 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     let _ = terminal.show_cursor();
     ratatui::restore();
     result
+}
+
+/// Probe the terminal for graphics support, logging the outcome (the
+/// probe result is invisible on screen and a frequent support question).
+fn probe_graphics() -> Option<Picker> {
+    match Picker::from_query_stdio() {
+        Ok(picker) => {
+            tracing::info!(
+                protocol = ?picker.protocol_type(),
+                font_size = ?picker.font_size(),
+                "graphics probe"
+            );
+            Some(picker)
+        }
+        Err(err) => {
+            tracing::warn!(%err, "graphics probe failed; images will not draw");
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,6 +314,7 @@ impl App {
             self.presentation.slides.len()
         );
         let shell = default_shell();
+        tracing::info!(shell, "suspending for interactive shell");
         let status = std::process::Command::new(&shell).status();
 
         // Re-enter the TUI before propagating any error, so a missing
@@ -294,7 +322,8 @@ impl App {
         *terminal = ratatui::init();
         terminal.clear()?;
         self.last_frame = Instant::now();
-        status.wrap_err_with(|| format!("cannot run {shell}"))?;
+        let status = status.wrap_err_with(|| format!("cannot run {shell}"))?;
+        tracing::info!(%status, "shell exited; resuming");
         Ok(())
     }
 
@@ -302,6 +331,7 @@ impl App {
 
     /// Handle a key press; returns true to quit.
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        tracing::trace!(?key, mode = ?self.mode, "key");
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
@@ -421,6 +451,7 @@ impl App {
         let last = self.presentation.slides.len() - 1;
         let index = index.min(last);
         if index != self.current {
+            tracing::debug!(from = self.current, to = index, "goto");
             let forward = index > self.current;
             let old = self.current;
             self.current = index;
@@ -447,6 +478,7 @@ impl App {
     fn reload(&mut self) {
         match load(&self.path, &self.highlighter) {
             Ok(loaded) => {
+                tracing::info!(slides = loaded.presentation.slides.len(), "reloaded");
                 self.current = self.current.min(loaded.presentation.slides.len() - 1);
                 self.selected = self.selected.min(loaded.presentation.slides.len() - 1);
                 self.presentation = loaded.presentation;
@@ -463,7 +495,10 @@ impl App {
                 self.error = self.images.take_errors().into_iter().next();
                 self.render_cache = None;
             }
-            Err(err) => self.error = Some(format!("reload failed: {err:#}")),
+            Err(err) => {
+                tracing::warn!(err = %format!("{err:#}"), "reload failed");
+                self.error = Some(format!("reload failed: {err:#}"));
+            }
         }
     }
 
@@ -507,6 +542,7 @@ impl App {
         }) {
             return;
         }
+        let started = Instant::now();
         self.images.preload(&self.presentation.slides[index]);
         let images = &self.images;
         let max = (content.width, content.height.saturating_sub(2).max(1));
@@ -544,6 +580,13 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         let paragraph = Paragraph::new(rendered.text.clone());
+        tracing::debug!(
+            index,
+            width = content.width,
+            height = content.height,
+            elapsed = ?started.elapsed(),
+            "rendered slide (cache miss)"
+        );
         self.render_cache = Some(RenderCache {
             index,
             width: content.width,

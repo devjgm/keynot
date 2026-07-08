@@ -16,6 +16,7 @@ pub struct Highlighter {
 
 impl Highlighter {
     pub fn new() -> Self {
+        let started = std::time::Instant::now();
         let mut themes = ThemeSet::load_defaults();
         // Vendored under assets/ (a plain file, embedded at compile
         // time): our approximation of VS Code's Dark+ token colors.
@@ -23,10 +24,13 @@ impl Highlighter {
         let theme = ThemeSet::load_from_reader(&mut std::io::Cursor::new(dark_plus.as_slice()))
             .expect("embedded Dark+ theme must parse");
         themes.themes.insert("Dark+".to_string(), theme);
-        Highlighter {
-            syntaxes: SyntaxSet::load_defaults_newlines(),
-            themes,
-        }
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        tracing::debug!(
+            elapsed = ?started.elapsed(),
+            themes = themes.themes.len(),
+            "loaded syntax and theme sets"
+        );
+        Highlighter { syntaxes, themes }
     }
 
     /// Names of the available code themes, sorted.

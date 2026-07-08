@@ -57,6 +57,7 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    init_tracing()?;
     match Cli::parse().command {
         Command::Play {
             file,
@@ -72,6 +73,27 @@ fn main() -> Result<()> {
         Command::New { file, force } => new(file, force),
         Command::Check { file } => check(file),
     }
+}
+
+/// When `KEYNOT_LOG` is set (to an `EnvFilter` spec such as `debug` or
+/// `keynot=trace`), write tracing output to `keynot.log` in the current
+/// directory. A file, never stdio: the player owns the terminal.
+fn init_tracing() -> Result<()> {
+    let Ok(filter) = std::env::var("KEYNOT_LOG") else {
+        return Ok(());
+    };
+    if filter.is_empty() {
+        return Ok(());
+    }
+    let log = fs_err::File::create("keynot.log")
+        .wrap_err("cannot create keynot.log for KEYNOT_LOG output")?;
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_writer(std::sync::Mutex::new(log))
+        .with_ansi(false)
+        .init();
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "keynot starting");
+    Ok(())
 }
 
 fn new(file: PathBuf, force: bool) -> Result<()> {
