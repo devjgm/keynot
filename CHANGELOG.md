@@ -8,6 +8,9 @@ semantic versioning.
 
 ### Added
 
+- Dynamic shell completions: register once (one line, or a drop-in
+  completion file for fish/bash) and `keynot pl<TAB>` completes from
+  the live CLI -- subcommands, flags, and values.
 - Press `e` during a show to open the deck in `$VISUAL`/`$EDITOR` at
   the line you are looking at (the highlighted block, or the top of
   the scrolled view); exiting the editor reloads from disk and

@@ -67,6 +67,14 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // Dynamic shell completions: when invoked by a completion request
+    // (the COMPLETE env var), answer it and exit. Registration is one
+    // line in the shell rc, e.g. `source <(COMPLETE=fish keynot)`.
+    clap_complete::CompleteEnv::with_factory(|| {
+        use clap::CommandFactory;
+        Cli::command()
+    })
+    .complete();
     init_error_reporting();
     init_tracing()?;
     match Cli::parse().command {

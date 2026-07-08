@@ -20,6 +20,27 @@ size. `keynot play` is forgiving where `check` is strict: unknown
 frontmatter keys are ignored so a deck written for a newer keynot (or
 a plain markdown file with foreign frontmatter) still opens.
 
+### Shell completions
+
+keynot completes itself: subcommands, flags, and flag values come from
+the real CLI at runtime, so completions never go stale. Register once
+with a one-line file (or rc line) that re-sources the registration
+from whatever `keynot` is on your PATH -- it survives reinstalls and
+upgrades untouched:
+
+```sh
+# fish: no rc change needed -- fish autoloads this file lazily
+echo 'COMPLETE=fish keynot | source' > ~/.config/fish/completions/keynot.fish
+
+# bash: also autoloaded, if the bash-completion package is installed
+echo 'source <(COMPLETE=bash keynot)' > ~/.local/share/bash-completion/completions/keynot
+
+# zsh: add to ~/.zshrc
+source <(COMPLETE=zsh keynot)
+```
+
+Elvish and PowerShell work the same way via their `COMPLETE=` names.
+
 For diagnostics, set `KEYNOT_LOG` to a tracing filter (e.g.
 `KEYNOT_LOG=debug`) and keynot writes a `keynot.log` in the current
 directory.

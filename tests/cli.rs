@@ -337,6 +337,27 @@ fn play_rejects_non_numeric_start_slide() {
 }
 
 #[test]
+fn complete_env_emits_shell_registration() {
+    let out = keynot().env("COMPLETE", "fish").assert().success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("complete") && stdout.contains("keynot"),
+        "fish registration script: {stdout}"
+    );
+}
+
+#[test]
+fn complete_env_answers_completion_requests() {
+    let out = keynot()
+        .env("COMPLETE", "fish")
+        .args(["--", "keynot", "pl"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+    assert!(stdout.contains("play"), "completing `keynot pl`: {stdout}");
+}
+
+#[test]
 fn help_lists_subcommands() {
     keynot()
         .arg("--help")

@@ -13,6 +13,7 @@ exclude = [".github/", ".gitattributes", "rustfmt.toml", "justfile", ".cargo/", 
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
 color-eyre = { version = "0.6.5", default-features = false, features = ["track-caller"] }
 # Must stay in lockstep with the crossterm version ratatui's `crossterm`
 # feature uses, or two incompatible crossterm versions end up in the build.
