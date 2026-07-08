@@ -38,7 +38,27 @@ pub enum Block {
         source: String,
         alt: String,
     },
+    Table(TableBlock),
     Rule,
+}
+
+/// A GFM table. Cells are inline-only (GFM allows no block content in
+/// them); the parser normalizes ragged rows to the header's width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableBlock {
+    /// Per-column alignment, from the `:---:` header markers.
+    pub alignments: Vec<TableAlign>,
+    pub header: Vec<Vec<InlineSpan>>,
+    pub rows: Vec<Vec<Vec<InlineSpan>>>,
+}
+
+/// Column alignment inside a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
 }
 
 /// An ordered or unordered list.
@@ -100,7 +120,8 @@ impl Slide {
     pub fn parse_columns(columns: &[String]) -> Self {
         let mut slide = Slide::default();
         for source in columns {
-            let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+            let options =
+                Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
             let parser = Parser::new_ext(source, options);
             let mut builder = SlideBuilder::default();
             for event in parser {
@@ -139,6 +160,11 @@ struct ParsedColumn {
 #[derive(Debug)]
 enum Container {
     Quote(Vec<Block>),
+    Table {
+        table: TableBlock,
+        /// Cells collect into the header until the head section ends.
+        in_head: bool,
+    },
     List(ListBlock),
     Item {
         blocks: Vec<Block>,
@@ -222,6 +248,34 @@ impl SlideBuilder {
                 blocks: Vec::new(),
                 task: None,
             }),
+            Tag::Table(alignments) => {
+                self.flush_inline();
+                self.containers.push(Container::Table {
+                    table: TableBlock {
+                        alignments: alignments
+                            .into_iter()
+                            .map(|a| match a {
+                                pulldown_cmark::Alignment::Center => TableAlign::Center,
+                                pulldown_cmark::Alignment::Right => TableAlign::Right,
+                                _ => TableAlign::Left,
+                            })
+                            .collect(),
+                        header: Vec::new(),
+                        rows: Vec::new(),
+                    },
+                    in_head: true,
+                });
+            }
+            Tag::TableRow => {
+                if let Some(Container::Table {
+                    table,
+                    in_head: false,
+                }) = self.containers.last_mut()
+                {
+                    table.rows.push(Vec::new());
+                }
+            }
+            Tag::TableHead | Tag::TableCell => {}
             Tag::CodeBlock(kind) => {
                 self.flush_inline();
                 let language = match kind {
@@ -286,6 +340,27 @@ impl SlideBuilder {
                     && let Some(Container::List(list)) = self.containers.last_mut()
                 {
                     list.items.push(ListItem { blocks, task });
+                }
+            }
+            TagEnd::Table => {
+                if let Some(Container::Table { table, .. }) = self.containers.pop() {
+                    self.push_block(Block::Table(table));
+                }
+            }
+            TagEnd::TableHead => {
+                if let Some(Container::Table { in_head, .. }) = self.containers.last_mut() {
+                    *in_head = false;
+                }
+            }
+            TagEnd::TableRow => {}
+            TagEnd::TableCell => {
+                let cell = self.take_inline();
+                if let Some(Container::Table { table, in_head }) = self.containers.last_mut() {
+                    if *in_head {
+                        table.header.push(cell);
+                    } else if let Some(row) = table.rows.last_mut() {
+                        row.push(cell);
+                    }
                 }
             }
             TagEnd::CodeBlock => {
@@ -389,9 +464,12 @@ impl SlideBuilder {
             Some(Container::Quote(blocks)) | Some(Container::Item { blocks, .. }) => {
                 blocks.push(block);
             }
-            // A block can never be a direct child of a list; defensively
-            // treat it as a sibling of the list instead of dropping it.
-            Some(Container::List(_)) | None => self.blocks.push(block),
+            // A block can never be a direct child of a list, and GFM
+            // table cells hold no blocks; defensively treat such a block
+            // as a sibling instead of dropping it.
+            Some(Container::List(_)) | Some(Container::Table { .. }) | None => {
+                self.blocks.push(block)
+            }
         }
     }
 
@@ -809,6 +887,41 @@ mod tests {
     }
 
     #[test]
+    fn tables_parse_with_alignment_and_cells() {
+        let slide = Slide::parse("| name | age |\n|:-----|----:|\n| ada | 36 |\n| bob | 40 |\n");
+        let Block::Table(table) = &slide.columns[0][0] else {
+            panic!("expected a table, got {:?}", slide.columns[0]);
+        };
+        assert_eq!(table.alignments, vec![TableAlign::Left, TableAlign::Right]);
+        assert_eq!(table.header.len(), 2);
+        assert_eq!(table.header[0][0].text, "name");
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[1][1][0].text, "40");
+    }
+
+    #[test]
+    fn table_cells_keep_inline_styles() {
+        let slide = Slide::parse("| a |\n|---|\n| **bold** and `code` |\n");
+        let Block::Table(table) = &slide.columns[0][0] else {
+            panic!("expected a table");
+        };
+        let cell = &table.rows[0][0];
+        assert!(cell.iter().any(|s| s.style.bold));
+        assert!(cell.iter().any(|s| s.style.code));
+    }
+
+    #[test]
+    fn ragged_table_rows_are_tolerated() {
+        // GFM: short rows pad, long rows truncate (pulldown handles it).
+        let slide = Slide::parse("| a | b |\n|---|---|\n| only |\n");
+        let Block::Table(table) = &slide.columns[0][0] else {
+            panic!("expected a table");
+        };
+        assert_eq!(table.rows.len(), 1);
+        assert!(table.rows[0].len() <= 2);
+    }
+
+    #[test]
     fn multiple_blocks_in_order() {
         let slide = Slide::parse("# T\n\npara\n\n- item\n\n```\ncode\n```\n\n> quote\n");
         let kinds: Vec<&str> = slide.columns[0]
@@ -821,6 +934,7 @@ mod tests {
                 Block::BlockQuote(_) => "quote",
                 Block::Image { .. } => "image",
                 Block::Rule => "rule",
+                Block::Table(_) => "table",
             })
             .collect();
         assert_eq!(kinds, vec!["heading", "para", "list", "code", "quote"]);

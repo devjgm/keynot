@@ -24,7 +24,9 @@ pub use metadata::{
     BackgroundSpec, CodeStyle, ColorOverrides, GradientDirection, GradientSpec, HighlightStyle,
     KNOWN_COLOR_KEYS, KNOWN_KEYS, Metadata, Transition,
 };
-pub use slide::{Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide};
+pub use slide::{
+    Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide, TableAlign, TableBlock,
+};
 
 /// A fully parsed presentation.
 #[derive(Debug, Clone, PartialEq)]

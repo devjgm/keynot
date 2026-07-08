@@ -2,7 +2,7 @@
 
 use super::highlight::Highlighter;
 use super::wrap::{spans_width, split_spans_at, wrap_spans};
-use crate::markdown::{Block, InlineSpan, ListBlock, Slide};
+use crate::markdown::{Block, InlineSpan, ListBlock, Slide, TableAlign, TableBlock};
 use crate::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -230,6 +230,152 @@ fn trim_trailing_blanks(lines: &mut Vec<Line<'static>>) {
     }
 }
 
+/// Table cells word-wrap to negotiated column widths: each column asks
+/// for its widest cell, and when that does not fit the available width,
+/// the widest columns shrink (down to a small floor) until it does.
+/// Borders match the code windows' rounded style.
+fn render_table(
+    table: &TableBlock,
+    ctx: &RenderContext,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    let columns = table
+        .header
+        .len()
+        .max(table.rows.iter().map(Vec::len).max().unwrap_or(0));
+    if columns == 0 {
+        return;
+    }
+    let border = Style::default().fg(ctx.theme.code_border);
+    // Tables sit on the code panel color, standing out from any
+    // background gradient the same way code windows do.
+    let bg = Style::default().bg(ctx.theme.code_background);
+
+    // Convert every cell once; header cells render bold.
+    let embolden = |spans: Vec<Span<'static>>| -> Vec<Span<'static>> {
+        spans
+            .into_iter()
+            .map(|mut s| {
+                s.style = s.style.add_modifier(Modifier::BOLD);
+                s
+            })
+            .collect()
+    };
+    let convert_row = |cells: &[Vec<InlineSpan>], bold: bool| -> Vec<Vec<Span<'static>>> {
+        (0..columns)
+            .map(|i| {
+                let spans = cells
+                    .get(i)
+                    .map(|cell| convert_inline(cell, ctx.theme))
+                    .unwrap_or_default();
+                if bold { embolden(spans) } else { spans }
+            })
+            .collect()
+    };
+    let header = convert_row(&table.header, true);
+    let body: Vec<Vec<Vec<Span<'static>>>> = table
+        .rows
+        .iter()
+        .map(|row| convert_row(row, false))
+        .collect();
+
+    // Column widths: natural, then shrink the widest until it fits.
+    const MIN_COLUMN: usize = 4;
+    let mut widths: Vec<usize> = (0..columns)
+        .map(|i| {
+            std::iter::once(&header)
+                .chain(body.iter())
+                .map(|row| spans_width(&row[i]))
+                .max()
+                .unwrap_or(1)
+                .max(1)
+        })
+        .collect();
+    let overhead = 3 * columns + 1;
+    let available = width.saturating_sub(overhead).max(columns * MIN_COLUMN);
+    while widths.iter().sum::<usize>() > available {
+        let widest = widths
+            .iter()
+            .position(|w| Some(w) == widths.iter().max())
+            .expect("non-empty");
+        if widths[widest] <= MIN_COLUMN {
+            break;
+        }
+        widths[widest] -= 1;
+    }
+
+    let edge = |left: char, mid: char, right: char| -> Line<'static> {
+        let mut spans = vec![Span::styled(left.to_string(), border)];
+        for (i, w) in widths.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(mid.to_string(), border));
+            }
+            spans.push(Span::styled("\u{2500}".repeat(w + 2), border));
+        }
+        spans.push(Span::styled(right.to_string(), border));
+        Line::from(spans)
+    };
+
+    // Emit one row: wrap each cell to its width; the tallest cell sets
+    // the row height and shorter cells pad with blank lines.
+    let emit_row = |cells: &[Vec<Span<'static>>], out: &mut Vec<Line<'static>>| {
+        let wrapped: Vec<Vec<Line<'static>>> = cells
+            .iter()
+            .zip(&widths)
+            .map(|(cell, w)| wrap_spans(cell.clone(), *w))
+            .collect();
+        let rows = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        for line_index in 0..rows {
+            let mut spans = vec![Span::styled("\u{2502}", border), Span::raw(" ")];
+            for (i, cell_lines) in wrapped.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled("\u{2502}", border));
+                    spans.push(Span::raw(" "));
+                }
+                let (content, used) = match cell_lines.get(line_index) {
+                    Some(line) => (line.spans.clone(), line.width()),
+                    None => (Vec::new(), 0),
+                };
+                let pad = widths[i].saturating_sub(used);
+                let (before, after) = match table.alignments.get(i).copied().unwrap_or_default() {
+                    TableAlign::Left => (0, pad),
+                    TableAlign::Right => (pad, 0),
+                    TableAlign::Center => (pad / 2, pad - pad / 2),
+                };
+                if before > 0 {
+                    spans.push(Span::raw(" ".repeat(before)));
+                }
+                spans.extend(content);
+                if after > 0 {
+                    spans.push(Span::raw(" ".repeat(after)));
+                }
+            }
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("\u{2502}", border));
+            out.push(clip_line(Line::from(spans).style(bg), width));
+        }
+    };
+
+    out.push(clip_line(
+        edge('\u{256d}', '\u{252c}', '\u{256e}').style(bg),
+        width,
+    ));
+    emit_row(&header, out);
+    out.push(clip_line(
+        edge('\u{251c}', '\u{253c}', '\u{2524}').style(bg),
+        width,
+    ));
+    for row in &body {
+        emit_row(row, out);
+    }
+    out.push(clip_line(
+        edge('\u{2570}', '\u{2534}', '\u{256f}').style(bg),
+        width,
+    ));
+}
+
 /// Render blocks, optionally separated by blank lines. List items render
 /// tight (no separators) so nested lists hug their parent item.
 /// `images` is `Some` only at the top level: nested blocks (quotes, list
@@ -257,6 +403,7 @@ fn render_blocks_spaced(
             Block::Image { source, alt } => {
                 render_image(source, alt, ctx, width, out, images.as_deref_mut());
             }
+            Block::Table(table) => render_table(table, ctx, width, out),
             Block::Rule => {
                 out.push(Line::styled(
                     "-".repeat(width),
@@ -975,6 +1122,89 @@ mod tests {
     fn single_column_image_is_centered() {
         let rendered = render_with_images("![c](c.png)", 40, (10, 4));
         assert_eq!(rendered.images[0].x, 15, "(40 - 10) / 2");
+    }
+
+    #[test]
+    fn table_renders_rounded_borders_and_alignment() {
+        let text = render("| name | n |\n|:-----|--:|\n| ada | 3 |\n| bo | 14 |\n", 40);
+        let rows: Vec<String> = text.lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(
+            rows,
+            vec![
+                "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{252c}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}",
+                "\u{2502} name \u{2502}  n \u{2502}",
+                "\u{251c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{253c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2524}",
+                "\u{2502} ada  \u{2502}  3 \u{2502}",
+                "\u{2502} bo   \u{2502} 14 \u{2502}",
+                "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2534}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}",
+            ]
+        );
+    }
+
+    #[test]
+    fn tables_sit_on_the_code_panel_background() {
+        let text = render("| h |\n|---|\n| b |\n", 40);
+        let code_bg = Theme::dark().code_background;
+        assert!(
+            text.lines.iter().all(|l| l.style.bg == Some(code_bg)),
+            "every table row carries the panel background"
+        );
+    }
+
+    #[test]
+    fn table_header_cells_are_bold() {
+        let text = render("| head |\n|------|\n| body |\n", 40);
+        let header_row = &text.lines[1];
+        let head_span = header_row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("head"))
+            .unwrap();
+        assert!(head_span.style.add_modifier.contains(Modifier::BOLD));
+        let body_row = &text.lines[3];
+        let body_span = body_row
+            .spans
+            .iter()
+            .find(|s| s.content.contains("body"))
+            .unwrap();
+        assert!(!body_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn wide_tables_wrap_cells_to_fit() {
+        let text = render(
+            "| a | words |\n|---|-------|\n| x | one two three four five |\n",
+            22,
+        );
+        let rows: Vec<String> = text.lines.iter().map(|l| l.to_string()).collect();
+        // Every line fits, and the long cell wrapped onto extra lines
+        // while its short neighbor padded with blanks.
+        assert!(rows.iter().all(|r| r.chars().count() <= 22), "{rows:?}");
+        assert!(rows.len() > 5, "wrapped body rows: {rows:?}");
+        let x_row = rows.iter().position(|r| r.contains('x')).unwrap();
+        assert!(rows[x_row].contains("one"));
+        assert!(rows[x_row + 1].contains('\u{2502}'), "continuation row");
+    }
+
+    #[test]
+    fn tables_render_inside_columns() {
+        let rendered = render_cols(&["left", "| h |\n|---|\n| b |\n"], 23);
+        let all: String = rendered
+            .text
+            .lines
+            .iter()
+            .map(|l| l.to_string() + "\n")
+            .collect();
+        assert!(all.contains('\u{256d}'), "table border in column 2:\n{all}");
+        assert!(all.contains("left"));
+        // The table's rows are highlightable like any content.
+        assert!(!rendered.columns[1].non_blank.is_empty());
+    }
+
+    #[test]
+    fn degenerate_width_tables_clip_but_never_overflow() {
+        let text = render("| aaaa | bbbb | cccc |\n|---|---|---|\n| 1 | 2 | 3 |\n", 10);
+        assert!(text.lines.iter().all(|l| l.width() <= 10));
     }
 
     #[test]

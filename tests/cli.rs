@@ -38,7 +38,7 @@ Play it with: keynot play [..]demo-talk.keynot
   title:  demo talk
   author: Your Name
   theme:  dark
-  slides: 5
+  slides: 6
   notes:  1
   tallest: slide 2, 14 lines (at 80 columns)
 

@@ -94,6 +94,19 @@ Ferris gets the right column to himself.
 
 ---
 
+## Tables
+
+Tables size to their content, wrap long cells, and honor the
+alignment markers:
+
+| feature    | aligned | notes                    |
+|:-----------|:-------:|-------------------------:|
+| columns    | center  | split slides with pipes  |
+| gradients  | center  | backgrounds can fade     |
+| tables     | center  | you are looking at one   |
+
+---
+
 # The End
 
 Press `?` for help, `o` for the outline.

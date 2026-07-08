@@ -8,6 +8,9 @@ semantic versioning.
 
 ### Added
 
+- GFM tables render with rounded borders, bold headers, and per-column
+  alignment; columns size to their content and word-wrap when the
+  table is wider than the slide.
 - Overflowing slides scroll: on a slide taller than the terminal,
   walking the line highlight (down/up) moves the view to follow the
   bar, with dim markers showing how many lines are hidden past each

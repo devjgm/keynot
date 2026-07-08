@@ -149,7 +149,7 @@ What each color controls, and its default in each base theme:
 | `accent`          | bullets, inline code, rules, UI highlights | `#dcdcaa` | `#a626a4` |
 | `link`            | link text                                  | `#3794ff` | `#0969da` |
 | `blockquote`      | the `|` bar in front of quotes             | `#6a9955` | `#50a14f` |
-| `code_background` | background of code blocks and inline code  | `#141414` | `#eaeaeb` |
+| `code_background` | background of code blocks, inline code, and tables | `#141414` | `#eaeaeb` |
 | `code_border`     | the terminal-window frame around code blocks | `#454545` | `#c4c4c8` |
 
 `code_theme` selects the syntax-highlighting palette for fenced code
@@ -328,6 +328,24 @@ The language token can be a name (`rust`, `python`) or a file extension
 as plain text. Code is never re-wrapped: lines wider than the slide are
 clipped, so format your snippets for the room.
 
+### Tables
+
+GFM tables render on the code panel background, with rounded borders
+matching the code windows:
+
+```markdown
+| name | role     | id |
+|:-----|:--------:|---:|
+| ada  | engineer |  1 |
+```
+
+Header cells are bold; `:---`, `:---:`, and `---:` markers align each
+column left, center, or right. Every column gets the width of its
+widest cell when that fits the slide (or its `|||` column); otherwise
+the widest columns shrink and their cells word-wrap, with a small
+minimum width per column. Cells are inline-only, per GFM: styles,
+inline code, and links work inside them, but not lists or code blocks.
+
 ### Blockquotes
 
 ```markdown
@@ -367,7 +385,7 @@ placeholder appears when the file cannot be read.
 
 ### Not supported (yet)
 
-Tables, footnotes, and math render as plain text or are dropped. Raw HTML
+Footnotes and math render as plain text. Raw HTML
 other than `<u>`, `<br>`, and comments is ignored (its text content still
 renders).
 
