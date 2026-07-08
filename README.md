@@ -25,6 +25,7 @@ but it's not, and it lives in your terminal, like you.
   `|||` line -- no layout hacks
 - Slide transitions via [tachyonfx](https://github.com/ratatui/tachyonfx)
 - Outline overview for jumping around, in-show help, live reload
+- Use `!` to quickly jump to a shell; exiting resumes the show
 
 ## Install
 
@@ -40,8 +41,6 @@ keynot play talk.keynot    # present it
 keynot check talk.keynot   # validate and summarize a file
 ```
 
-![keynot demo](https://raw.githubusercontent.com/devjgm/keynot/main/assets/demo.gif)
-
 Useful `play` flags:
 
 ```sh
@@ -53,6 +52,20 @@ highlight the line you are talking about (an accent bar by default; set
 `highlight: dim` to dim everything else instead), `o` for the outline,
 `!` to drop into a shell for a live demo (exit to resume), `r` to reload
 the file after editing it, `?` for the full key list, `q` to quit.
+
+## What it looks like
+
+Inline styles beside quotes and rules, in two columns:
+
+![Inline styles and quotes, side by side](https://raw.githubusercontent.com/devjgm/keynot/main/assets/screenshots/slide-2.png)
+
+Lists, highlighted code, and fence-safety notes in a three-column spread:
+
+![Lists, code, and more in three columns](https://raw.githubusercontent.com/devjgm/keynot/main/assets/screenshots/slide-3.png)
+
+Real images in a terminal, in their own column:
+
+![The images slide with Ferris in the right column](https://raw.githubusercontent.com/devjgm/keynot/main/assets/screenshots/slide-4.png)
 
 ## The format in 20 seconds
 
@@ -113,6 +126,12 @@ the CLI.
 
 Formatting uses a nightly-only rustfmt option (`group_imports`), so
 format with `cargo +nightly fmt`; CI checks it that way.
+
+Recurring tasks live in the [justfile](justfile) -- run `just` to list
+them: `just ci` mirrors the CI checks, `just screenshots` regenerates
+the README screenshots from the tour (a Rust helper in `xtask/`, run
+via `cargo xtask`; needs asciinema's `agg` on PATH), and `just release`
+publishes to crates.io and cuts the tagged GitHub release.
 
 Tests cover three layers: renderer unit tests assert exact styled
 output, app tests drive the real draw pipeline into ratatui's
