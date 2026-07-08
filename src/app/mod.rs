@@ -123,6 +123,24 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     result
 }
 
+/// The area available to slide content within a terminal of `area`'s
+/// size: the player's horizontal/vertical padding and one footer row.
+/// `keynot check` measures against this too, so its verdicts use
+/// show-time geometry. `None` when the terminal is too small to draw.
+pub fn content_area(area: Rect) -> Option<Rect> {
+    if area.height < 3 || area.width < 10 {
+        return None;
+    }
+    let pad_x = (area.width / 12).clamp(2, 12);
+    let pad_y = (area.height / 12).clamp(1, 3);
+    Some(Rect::new(
+        area.x + pad_x,
+        area.y + pad_y,
+        area.width - 2 * pad_x,
+        area.height - 2 * pad_y - 1,
+    ))
+}
+
 /// Probe the terminal for graphics support, logging the outcome (the
 /// probe result is invisible on screen and a frequent support question).
 fn probe_graphics() -> Option<Picker> {
@@ -624,19 +642,10 @@ impl App {
     fn draw(&mut self, frame: &mut Frame, elapsed: Duration) {
         let area = frame.area();
         self.draw_background(frame, area);
-        if area.height < 3 || area.width < 10 {
+        let Some(content) = content_area(area) else {
             return;
-        }
-
+        };
         let footer = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
-        let pad_x = (area.width / 12).clamp(2, 12);
-        let pad_y = (area.height / 12).clamp(1, 3);
-        let content = Rect::new(
-            area.x + pad_x,
-            area.y + pad_y,
-            area.width - 2 * pad_x,
-            area.height - 2 * pad_y - 1,
-        );
 
         match self.mode {
             Mode::Slides => self.draw_slide(frame, content, elapsed),
@@ -1574,6 +1583,15 @@ mod tests {
             HashMap::new(),
             PlayOptions::default(),
         )
+    }
+
+    #[test]
+    fn content_area_mirrors_the_draw_geometry() {
+        // 60x20: pad_x = 5, pad_y = 1, one footer row.
+        let area = content_area(Rect::new(0, 0, 60, 20)).unwrap();
+        assert_eq!((area.width, area.height), (50, 17));
+        assert_eq!(content_area(Rect::new(0, 0, 8, 20)), None, "too narrow");
+        assert_eq!(content_area(Rect::new(0, 0, 60, 2)), None, "too short");
     }
 
     /// A deck of 20 one-line paragraphs: ~40 rendered rows.

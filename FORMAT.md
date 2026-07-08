@@ -427,7 +427,8 @@ counting the hidden lines. Walking the line highlight (down/up)
 scrolls the view to follow the bar, so an overflowing slide is still
 fully presentable; Esc (or changing slides) returns to the top. Images
 draw only while fully in view. `keynot check` reports the tallest
-slide at a reference 80 columns, so none of this surprises you at show
+slide at a reference 80 columns -- and, when run in a terminal, whether
+every slide fits that terminal -- so none of this surprises you at show
 time (`---` remains the pagination tool).
 
 The outline lists every slide by its first heading (or first line of

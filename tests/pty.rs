@@ -345,6 +345,18 @@ fn play_tolerates_unknown_frontmatter_keys() {
 }
 
 #[test]
+fn check_in_a_terminal_reports_whether_slides_fit() {
+    // The `fits:` verdict appears only when stdout is a real terminal
+    // (piped runs, like the CLI snapshot tests, never see it).
+    let dir = tempfile::tempdir().unwrap();
+    fs_err::write(dir.path().join("deck.keynot"), "# One slide\n").unwrap();
+    let term = FakeTerminal::spawn(dir.path(), &["check", "deck.keynot"], false);
+    term.wait_for(b"fits:", "the terminal-size verdict");
+    term.wait_for(b"100x30", "measured against the pty size");
+    term.wait_for(b"yes", "one short slide fits");
+}
+
+#[test]
 fn quitting_restores_the_terminal() {
     let dir = tempfile::tempdir().unwrap();
     write_deck(dir.path());

@@ -4,6 +4,7 @@ use eyre::{Result, WrapErr, bail};
 use keynot::app::{self, ImageMode, PlayOptions};
 use keynot::render::Highlighter;
 use keynot::template;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 /// Help colors matching the default dark theme (VS Code Dark+): blue
@@ -83,7 +84,6 @@ fn main() -> Result<()> {
 /// its format keeps the message on the `Error:` line, which is what
 /// grep-ability wants.
 fn init_error_reporting() {
-    use std::io::IsTerminal;
     if std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal() {
         let _ = color_eyre::config::HookBuilder::new()
             .display_location_section(false)
@@ -192,5 +192,36 @@ fn check(file: PathBuf) -> Result<()> {
     let (rows, tallest) =
         keynot::render::tallest_slide(&presentation.slides, &loaded.theme, &highlighter, 80);
     println!("  tallest: slide {tallest}, {rows} lines (at 80 columns)");
+    // When check runs in a real terminal, also answer the question that
+    // matters at show time: does everything fit *this* screen? (Absent
+    // when piped, so scripts and snapshots see stable output.)
+    if std::io::stdout().is_terminal()
+        && let Ok((cols, screen_rows)) = crossterm::terminal::size()
+    {
+        let line = match app::content_area(ratatui::layout::Rect::new(0, 0, cols, screen_rows)) {
+            Some(content) => {
+                let (need, slide) = keynot::render::tallest_slide(
+                    &presentation.slides,
+                    &loaded.theme,
+                    &highlighter,
+                    content.width as usize,
+                );
+                let usable = content.height as usize;
+                if need > usable {
+                    format!(
+                        "  fits:    no - slide {slide} needs {need} lines but this \
+                         {cols}x{screen_rows} terminal shows {usable} (it will scroll)"
+                    )
+                } else {
+                    format!(
+                        "  fits:    yes - tallest slide uses {need} of {usable} lines \
+                         in this {cols}x{screen_rows} terminal"
+                    )
+                }
+            }
+            None => format!("  fits:    no - a {cols}x{screen_rows} terminal is too small to draw"),
+        };
+        println!("{line}");
+    }
     Ok(())
 }
