@@ -51,10 +51,17 @@ prerelease: ci
         echo "no GitHub CI runs found for $sha; push it and let CI finish first" >&2
         exit 1
     fi
-    not_green=$(gh run list --commit "$sha" --json status,conclusion \
-        --jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length')
-    if [ "$not_green" -ne 0 ]; then
-        echo "GitHub CI is not green for $sha:" >&2
+    running=$(gh run list --commit "$sha" --json status \
+        --jq '[.[] | select(.status != "completed")] | length')
+    if [ "$running" -ne 0 ]; then
+        echo "GitHub CI is still running for $sha; try again when it finishes:" >&2
+        gh run list --commit "$sha" >&2
+        exit 1
+    fi
+    failed=$(gh run list --commit "$sha" --json conclusion \
+        --jq '[.[] | select(.conclusion != "success")] | length')
+    if [ "$failed" -ne 0 ]; then
+        echo "GitHub CI failed for $sha:" >&2
         gh run list --commit "$sha" >&2
         exit 1
     fi
