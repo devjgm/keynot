@@ -28,7 +28,10 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     verbatim_doc_comment,
     styles = HELP_STYLES,
-    after_help = "Docs and releases: https://crates.io/crates/keynot"
+    after_help = "\
+Format reference: https://github.com/devjgm/keynot/blob/main/FORMAT.md
+Usage guide:      https://github.com/devjgm/keynot/blob/main/USAGE.md
+Releases:         https://crates.io/crates/keynot"
 )]
 struct Cli {
     #[command(subcommand)]

@@ -10,9 +10,16 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 /// One parsed slide: one or more side-by-side columns of blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Slide {
+    /// 1-based line in the source file where this slide starts (used by
+    /// the in-show editor jump); `1` when parsed outside a file.
+    pub line: usize,
     /// The slide's columns (from `|||` separators); single-column slides
     /// have exactly one entry.
     pub columns: Vec<Vec<Block>>,
+    /// Source line of each top-level block, parallel to `columns`
+    /// (column-relative from [`Slide::parse_columns`]; the presentation
+    /// parser rewrites them to file-absolute lines).
+    pub block_lines: Vec<Vec<usize>>,
     /// Speaker notes collected from HTML comments across all columns, in
     /// document order.
     pub notes: Vec<String>,
@@ -167,7 +174,10 @@ impl Slide {
 
     /// Parse a slide from its column sources (one per `|||` section).
     pub fn parse_columns(columns: &[String]) -> Self {
-        let mut slide = Slide::default();
+        let mut slide = Slide {
+            line: 1,
+            ..Slide::default()
+        };
         for source in columns {
             let options = Options::ENABLE_STRIKETHROUGH
                 | Options::ENABLE_TASKLISTS
@@ -177,16 +187,24 @@ impl Slide {
                 | Options::ENABLE_DEFINITION_LIST
                 | Options::ENABLE_FOOTNOTES;
             let parser = Parser::new_ext(source, options);
-            let mut builder = SlideBuilder::default();
-            for event in parser {
+            let mut builder = SlideBuilder {
+                // Byte offset where each source line begins, so events
+                // (which carry byte ranges) map back to line numbers.
+                line_starts: line_starts(source),
+                ..SlideBuilder::default()
+            };
+            for (event, range) in parser.into_offset_iter() {
+                builder.current_line = builder.line_of(range.start);
                 builder.event(event);
             }
             let column = builder.finish();
             slide.columns.push(column.blocks);
+            slide.block_lines.push(column.block_lines);
             slide.notes.extend(column.notes);
         }
         if slide.columns.is_empty() {
             slide.columns.push(Vec::new());
+            slide.block_lines.push(Vec::new());
         }
         slide
     }
@@ -204,10 +222,19 @@ impl Slide {
     }
 }
 
-/// One parsed `|||` column: its blocks and the notes found in it.
+/// One parsed `|||` column: its blocks (with the source line of each
+/// top-level one) and the notes found in it.
 struct ParsedColumn {
     blocks: Vec<Block>,
+    block_lines: Vec<usize>,
     notes: Vec<String>,
+}
+
+/// Byte offsets where each line of `source` begins.
+fn line_starts(source: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(i, _)| i + 1))
+        .collect()
 }
 
 /// Open container blocks while walking parser events.
@@ -249,6 +276,15 @@ struct SlideBuilder {
     /// Footnote numbers by name, assigned in order of first sighting.
     footnote_numbers: std::collections::HashMap<String, usize>,
     footnotes: Vec<Footnote>,
+    /// Byte offsets of line starts in this column's source.
+    line_starts: Vec<usize>,
+    /// 1-based (column-relative) line of the event being processed.
+    current_line: usize,
+    /// Source line of each top-level block, parallel to `blocks`.
+    block_lines: Vec<usize>,
+    /// Line of the first footnote definition, for the synthesized
+    /// footnote section block.
+    first_footnote_line: Option<usize>,
 }
 
 impl SlideBuilder {
@@ -373,6 +409,9 @@ impl SlideBuilder {
             }
             Tag::FootnoteDefinition(name) => {
                 self.flush_inline();
+                if self.first_footnote_line.is_none() {
+                    self.first_footnote_line = Some(self.current_line);
+                }
                 let number = self.footnote_number(&name);
                 self.containers.push(Container::Footnote {
                     number,
@@ -597,8 +636,19 @@ impl SlideBuilder {
             Some(Container::List(_))
             | Some(Container::Table { .. })
             | Some(Container::DefinitionList(_))
-            | None => self.blocks.push(block),
+            | None => {
+                // Top level: remember where this block came from. End
+                // events carry the whole element's range, so
+                // current_line is the block's first line.
+                self.block_lines.push(self.current_line);
+                self.blocks.push(block);
+            }
         }
+    }
+
+    /// The 1-based line containing byte `offset`.
+    fn line_of(&self, offset: usize) -> usize {
+        self.line_starts.partition_point(|&start| start <= offset)
     }
 
     /// The stable number for footnote `name`, assigned on first sight.
@@ -614,10 +664,13 @@ impl SlideBuilder {
         self.flush_inline();
         if !self.footnotes.is_empty() {
             self.footnotes.sort_by_key(|f| f.number);
+            self.block_lines
+                .push(self.first_footnote_line.unwrap_or(self.current_line));
             self.blocks.push(Block::Footnotes(self.footnotes));
         }
         ParsedColumn {
             blocks: self.blocks,
+            block_lines: self.block_lines,
             notes: self.notes,
         }
     }

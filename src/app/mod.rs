@@ -278,6 +278,8 @@ struct App {
     pending_images: Option<std::sync::mpsc::Receiver<HashMap<String, images::Decoded>>>,
     /// Set by the `!` key: drop to an interactive shell on the next tick.
     shell_requested: bool,
+    /// `e` was pressed: open $EDITOR on the file, then reload.
+    edit_requested: bool,
     /// Effect running on the incoming (current) slide.
     effect: Option<Effect>,
     /// Exit animation still playing on the slide being navigated away
@@ -326,6 +328,7 @@ impl App {
             scroll: 0,
             pending_images: None,
             shell_requested: false,
+            edit_requested: false,
             effect: None,
             outgoing: None,
             pending_enter: None,
@@ -362,6 +365,12 @@ impl App {
                 }
                 if self.handle_key(key) {
                     return Ok(());
+                }
+                if self.edit_requested {
+                    self.edit_requested = false;
+                    if let Err(err) = self.edit_in_editor(terminal) {
+                        self.error = Some(format!("edit failed: {err:#}"));
+                    }
                 }
                 if self.shell_requested {
                     self.shell_requested = false;
@@ -401,6 +410,94 @@ impl App {
         Ok(())
     }
 
+    /// `e`: suspend the show and open $VISUAL/$EDITOR on the deck at
+    /// the line being viewed (see [`Self::edit_target_line`]), using
+    /// each editor's own line-jump syntax where known (see
+    /// [`editor_args`]). When the editor exits, reload from disk and
+    /// restore the view -- typo fixed, show goes on where it left off.
+    fn edit_in_editor(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
+        let line = self.edit_target_line();
+        let editor = default_editor();
+        // Shell-style splitting, so quoted arguments and program paths
+        // with spaces survive: EDITOR='"/Applications/My Editor" -w'.
+        let parts = shlex::split(&editor)
+            .filter(|parts| !parts.is_empty())
+            .ok_or_else(|| eyre::eyre!("cannot parse editor command `{editor}`"))?;
+        let (program, args) = parts.split_first().expect("checked non-empty");
+        let mut command = std::process::Command::new(program);
+        command.args(args);
+        command.args(editor_args(program, line, &self.path));
+
+        let _ = terminal.show_cursor();
+        ratatui::restore();
+        tracing::info!(editor, line, "suspending for the editor");
+        let status = command.status();
+
+        // Re-enter the TUI before propagating any error, so a missing
+        // editor does not leave the terminal in cooked mode.
+        *terminal = ratatui::init();
+        terminal.clear()?;
+        self.last_frame = Instant::now();
+        let status = status.wrap_err_with(|| format!("cannot run {editor}"))?;
+        tracing::info!(%status, "editor exited; reloading");
+        self.reload_preserving_view();
+        Ok(())
+    }
+
+    /// Reload, then restore the highlight -- and with it the scroll
+    /// position, which follows the highlight -- so edit-and-resume
+    /// lands where the speaker was. The next draw re-clamps against
+    /// the edited file's new geometry.
+    fn reload_preserving_view(&mut self) {
+        let highlight = self.highlight;
+        self.reload();
+        self.highlight = highlight;
+    }
+
+    /// The source line `e` should open: the highlighted line's block,
+    /// else the first block at or above the current scroll position,
+    /// else the slide's first line. This is what makes editing a long
+    /// single-slide document (a README) land where you are looking.
+    fn edit_target_line(&self) -> usize {
+        let slide_line = self
+            .presentation
+            .slides
+            .get(self.current)
+            .map_or(1, |s| s.line);
+        let Some(cache) = &self.render_cache else {
+            return slide_line;
+        };
+        let (only_column, row) = match self.highlight {
+            Some((col, pos)) => {
+                let row = cache
+                    .rendered
+                    .columns
+                    .get(col)
+                    .and_then(|span| span.non_blank.get(pos))
+                    .copied()
+                    .unwrap_or(0);
+                (Some(col), row)
+            }
+            None => (None, self.scroll as usize),
+        };
+        cache
+            .rendered
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| only_column.is_none_or(|col| col == *i))
+            .filter_map(|(_, span)| {
+                span.block_rows
+                    .iter()
+                    .rev()
+                    .find(|(first_row, _)| *first_row <= row)
+                    .copied()
+            })
+            // Among columns, the block starting closest to the row.
+            .max_by_key(|&(first_row, _)| first_row)
+            .map_or(slide_line, |(_, line)| line)
+    }
+
     // --- input ---
 
     /// Handle a key press; returns true to quit.
@@ -438,6 +535,9 @@ impl App {
             }
             KeyCode::Down | KeyCode::Char('j') => self.highlight_move(1),
             KeyCode::Up | KeyCode::Char('k') => self.highlight_move(-1),
+            // Slides mode only: in the outline it would ambiguously
+            // target the playing slide, not the selected one.
+            KeyCode::Char('e') => self.edit_requested = true,
             KeyCode::Home | KeyCode::Char('g') => self.goto(0),
             KeyCode::End | KeyCode::Char('G') => self.goto(usize::MAX),
             KeyCode::Esc => self.highlight = None,
@@ -1005,6 +1105,7 @@ impl App {
             ("enter (outline)", "jump to slide"),
             ("0-9 (outline)", "go to number"),
             ("!", "shell; exit resumes"),
+            ("e", "edit file; exit resumes"),
             ("r", "reload file"),
             ("?", "help"),
             ("q, ctrl-c", "quit"),
@@ -1044,6 +1145,82 @@ impl App {
         frame.render_widget(Clear, popup);
         frame.render_widget(Paragraph::new(Text::from(lines)).block(block), popup);
     }
+}
+
+/// The user's editor: `$VISUAL`, then `$EDITOR`, then the platform
+/// default -- `vi` on unix, `notepad` on Windows (always present, and
+/// it blocks until closed, which the resume-then-reload flow needs).
+/// The value may carry arguments (`code --wait`), split shell-style.
+fn default_editor() -> String {
+    editor_from(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok())
+}
+
+/// [`default_editor`]'s testable core: the first non-blank value wins.
+/// A set-but-empty `VISUAL=""` (common in shell profiles) must not
+/// shadow a valid `EDITOR`.
+fn editor_from(visual: Option<String>, editor: Option<String>) -> String {
+    [visual, editor]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                "notepad".to_string()
+            } else {
+                "vi".to_string()
+            }
+        })
+}
+
+/// The arguments that open `path` at `line` in `program`, encoding
+/// each editor family's syntax -- including fused `file:line` forms
+/// and the `--wait` that GUI editors need so they block until closed.
+/// Unknown editors just get the file; guessing syntax would be worse.
+fn editor_args(program: &str, line: usize, path: &Path) -> Vec<std::ffi::OsString> {
+    let name = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program);
+    let path_os = path.as_os_str().to_os_string();
+    match name {
+        // The vi/emacs family: a `+N` argument before the file.
+        "vi" | "vim" | "nvim" | "nano" | "pico" | "emacs" | "micro" | "kak" => {
+            vec![format!("+{line}").into(), path_os]
+        }
+        // VS Code and kin: the line fuses with the path after --goto,
+        // and --wait keeps the process alive until the tab closes
+        // (harmlessly repeated if the user's $EDITOR already has it).
+        "code" | "codium" | "code-insiders" => vec![
+            "--wait".into(),
+            "--goto".into(),
+            fused_path_line(path, line),
+        ],
+        // Sublime Text: fused file:line, and --wait to block.
+        "subl" => vec!["--wait".into(), fused_path_line(path, line)],
+        // TextMate: a separate flag and value.
+        "mate" => vec![
+            "--wait".into(),
+            "--line".into(),
+            line.to_string().into(),
+            path_os,
+        ],
+        // SubEthaEdit: --goto line[:column[,length]], and --wait to
+        // block (its own docs suggest EDITOR="see -w").
+        "see" => vec![
+            "--wait".into(),
+            "--goto".into(),
+            line.to_string().into(),
+            path_os,
+        ],
+        _ => vec![path_os],
+    }
+}
+
+/// `path:line` as one argument, for editors with fused syntax.
+fn fused_path_line(path: &Path, line: usize) -> std::ffi::OsString {
+    let mut fused = path.as_os_str().to_os_string();
+    fused.push(format!(":{line}"));
+    fused
 }
 
 /// The user's interactive shell: `%COMSPEC%` (usually cmd.exe) on
@@ -1209,6 +1386,136 @@ mod tests {
         assert_eq!(app.mode, Mode::Outline, "tab must not close it either");
         press(&mut app, KeyCode::Char('o'));
         assert_eq!(app.mode, Mode::Slides);
+    }
+
+    #[test]
+    fn edit_reload_preserves_the_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let deck = dir.path().join("t.keynot");
+        fs_err::write(&deck, "one\n\ntwo\n\nthree\n").unwrap();
+        let highlighter = Highlighter::new();
+        let loaded = load(&deck, &highlighter).unwrap();
+        let mut app = App::new(
+            deck,
+            loaded,
+            highlighter,
+            None,
+            HashMap::new(),
+            PlayOptions::default(),
+        );
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.highlight, Some((0, 2)));
+
+        app.reload_preserving_view();
+        draw(&mut app, Duration::ZERO);
+        assert_eq!(
+            app.highlight,
+            Some((0, 2)),
+            "the highlight (and its scroll) survive the reload"
+        );
+    }
+
+    #[test]
+    fn edit_targets_the_highlighted_blocks_line() {
+        // Slide starts at line 4; the third paragraph is at line 8.
+        let mut app = test_app("---\ntitle: T\n---\nfirst\n\nsecond\n\nthird\n");
+        draw(&mut app, Duration::ZERO);
+        assert_eq!(app.edit_target_line(), 4, "no highlight: slide start");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(
+            app.edit_target_line(),
+            8,
+            "highlight on the third paragraph"
+        );
+    }
+
+    #[test]
+    fn edit_targets_the_scrolled_view_without_a_highlight() {
+        let mut app = test_app(&tall_deck());
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down);
+        }
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Esc); // scroll resets on the next draw...
+        let line_before_reset = {
+            app.highlight = None;
+            app.scroll = 30;
+            app.edit_target_line()
+        };
+        assert!(
+            line_before_reset > 20,
+            "a deep scroll targets a deep block: line {line_before_reset}"
+        );
+    }
+
+    #[test]
+    fn edit_targets_the_highlighted_column() {
+        // Column 2 starts at line 5 of the file.
+        let mut app = test_app("left one\n\nleft two\n|||\nright\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.highlight, Some((1, 0)));
+        assert_eq!(app.edit_target_line(), 5, "the right column's block");
+    }
+
+    #[test]
+    fn editor_precedence_first_nonblank_wins() {
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(editor_from(s("nvim"), s("vi")), "nvim");
+        assert_eq!(
+            editor_from(s(""), s("nvim")),
+            "nvim",
+            "empty VISUAL must not shadow EDITOR"
+        );
+        assert_eq!(
+            editor_from(None, s("  ")),
+            if cfg!(windows) { "notepad" } else { "vi" }
+        );
+        assert_eq!(
+            editor_from(None, None),
+            if cfg!(windows) { "notepad" } else { "vi" }
+        );
+    }
+
+    #[test]
+    fn e_does_nothing_in_the_outline() {
+        let mut app = test_app("# A\n---\n# B\n");
+        app.mode = Mode::Outline;
+        press(&mut app, KeyCode::Char('e'));
+        assert!(!app.edit_requested, "e is a slides-mode key");
+    }
+
+    #[test]
+    fn e_requests_the_editor() {
+        let mut app = test_app("# A\n");
+        assert!(!app.edit_requested);
+        press(&mut app, KeyCode::Char('e'));
+        assert!(app.edit_requested);
+    }
+
+    #[test]
+    fn editor_args_encode_each_familys_syntax() {
+        let path = Path::new("talk.keynot");
+        let args = |program: &str| -> Vec<String> {
+            editor_args(program, 12, path)
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(args("vim"), ["+12", "talk.keynot"]);
+        assert_eq!(args("/usr/bin/nvim"), ["+12", "talk.keynot"]);
+        assert_eq!(args("code"), ["--wait", "--goto", "talk.keynot:12"]);
+        assert_eq!(args("subl"), ["--wait", "talk.keynot:12"]);
+        assert_eq!(args("mate"), ["--wait", "--line", "12", "talk.keynot"]);
+        assert_eq!(args("see"), ["--wait", "--goto", "12", "talk.keynot"]);
+        assert_eq!(args("notepad"), ["talk.keynot"], "unknown: just the file");
     }
 
     #[test]
@@ -1621,6 +1928,34 @@ mod tests {
     fn transitions_cover_the_screen_minus_the_footer() {
         let area = Rect::new(0, 0, 100, 30);
         assert_eq!(transition_area(area), Rect::new(0, 0, 100, 29));
+    }
+
+    #[test]
+    fn forward_sweep_arrives_from_the_right() {
+        // sweep_in paints not-yet-revealed cells with the fill color;
+        // moving forward the reveal edge travels right-to-left, so the
+        // filled region's right boundary must shrink across frames --
+        // pinning the direction convention a user bug report set.
+        let mut app = test_app("---\ntransition: sweep\n---\n# AAAA\n---\n# BBBB\n");
+        draw(&mut app, Duration::ZERO);
+        let fill = app.theme.background.base();
+        press(&mut app, KeyCode::Right);
+        let boundary = |terminal: &Terminal<TestBackend>| -> i64 {
+            let buffer = terminal.backend().buffer();
+            let area = *buffer.area();
+            let y = 2; // a row whose gradient color differs from the fill
+            (area.left()..area.right())
+                .rev()
+                .find(|&x| buffer[(x, y)].bg == fill)
+                .map(i64::from)
+                .unwrap_or(-1)
+        };
+        let early = boundary(&draw(&mut app, Duration::from_millis(60)));
+        let late = boundary(&draw(&mut app, Duration::from_millis(140)));
+        assert!(
+            early > late,
+            "fill boundary moves right-to-left: early {early} -> late {late}"
+        );
     }
 
     #[test]

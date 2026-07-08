@@ -57,8 +57,10 @@ keynot play --start-slide 7 talk.keynot   # resume at slide 7
 During the show: left/right arrows or space to change slides, up/down to
 highlight the line you are talking about (an accent bar by default; set
 `highlight: dim` to dim everything else instead), `o` for the outline,
-`!` to drop into a shell for a live demo (exit to resume), `r` to reload
-the file after editing it, `?` for the full key list, `q` to quit.
+`!` to drop into a shell for a live demo (exit to resume), `e` to open
+the file in `$EDITOR` at the line you are viewing (exit to reload and
+resume), `?` for the full key list, `q` to quit. The full tour of keys
+and player behavior is in [USAGE.md](USAGE.md).
 
 ## What it looks like
 
@@ -102,9 +104,10 @@ fn main() { println!("highlighted"); }
 ```
 ````
 
-See [FORMAT.md](FORMAT.md) for the complete reference: all frontmatter
-keys, theming and color values, transitions, supported markdown, and the
-exact splitting rules.
+See [FORMAT.md](FORMAT.md) for the complete format reference (all
+frontmatter keys, theming and color values, supported markdown, the
+exact splitting rules) and [USAGE.md](USAGE.md) for running keynot
+(subcommands, every key, player behavior).
 
 ## Transitions
 

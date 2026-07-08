@@ -18,6 +18,9 @@ pub struct RawSlide {
     /// The slide's columns, without the `---` or `|||` separators. Always
     /// at least one entry.
     pub columns: Vec<String>,
+    /// 1-based file line where each column's text begins (parallel to
+    /// `columns`), so parsed blocks can be traced back to source lines.
+    pub column_lines: Vec<usize>,
     /// 1-based line number in the original file where this slide starts.
     pub line: usize,
 }
@@ -47,11 +50,13 @@ pub fn split(source: &str) -> Result<SplitResult, ParseError> {
     }
 
     let mut fence: Option<Fence> = None;
-    let mut columns: Vec<String> = Vec::new();
+    let mut columns: Vec<(String, usize)> = Vec::new();
     let mut current = Vec::new();
     let mut start_line = idx + 1;
+    let mut column_line = start_line;
 
     for (offset, line) in lines[idx..].iter().enumerate() {
+        let file_line = idx + offset + 1;
         match &fence {
             Some(open) if open.closed_by(line) => fence = None,
             Some(_) => {}
@@ -59,39 +64,44 @@ pub fn split(source: &str) -> Result<SplitResult, ParseError> {
                 if let Some(open) = Fence::opened_by(line) {
                     fence = Some(open);
                 } else if line.trim() == "---" {
-                    push_column(&mut columns, &mut current);
+                    push_column(&mut columns, &mut current, column_line);
                     push_slide(&mut result.slides, &mut columns, start_line);
-                    start_line = idx + offset + 2;
+                    start_line = file_line + 1;
+                    column_line = start_line;
                     continue;
                 } else if line.trim() == "|||" {
-                    push_column(&mut columns, &mut current);
+                    push_column(&mut columns, &mut current, column_line);
+                    column_line = file_line + 1;
                     continue;
                 }
             }
         }
         current.push(*line);
     }
-    push_column(&mut columns, &mut current);
+    push_column(&mut columns, &mut current, column_line);
     push_slide(&mut result.slides, &mut columns, start_line);
 
     Ok(result)
 }
 
-/// Finish the current column, dropping it when blank.
-fn push_column(columns: &mut Vec<String>, current: &mut Vec<&str>) {
+/// Finish the current column, dropping it when blank. `line` is the
+/// 1-based file line of the column's first line.
+fn push_column(columns: &mut Vec<(String, usize)>, current: &mut Vec<&str>, line: usize) {
     let content = current.join("\n");
     current.clear();
     if !content.trim().is_empty() {
-        columns.push(content);
+        columns.push((content, line));
     }
 }
 
 /// Finish the current slide, dropping it when it has no columns.
-fn push_slide(slides: &mut Vec<RawSlide>, columns: &mut Vec<String>, start_line: usize) {
+fn push_slide(slides: &mut Vec<RawSlide>, columns: &mut Vec<(String, usize)>, start_line: usize) {
     let columns = std::mem::take(columns);
     if !columns.is_empty() {
+        let (columns, column_lines) = columns.into_iter().unzip();
         slides.push(RawSlide {
             columns,
+            column_lines,
             line: start_line,
         });
     }
@@ -331,6 +341,13 @@ mod tests {
     fn three_columns() {
         let cols = slide_columns("a\n|||\nb\n|||\nc\n");
         assert_eq!(cols, vec![vec!["a", "b", "c"]]);
+    }
+
+    #[test]
+    fn columns_record_their_own_file_lines() {
+        let r = split("# A\n\nbody\n|||\nright col\n---\n# B\n").unwrap();
+        assert_eq!(r.slides[0].column_lines, vec![1, 5]);
+        assert_eq!(r.slides[1].column_lines, vec![7]);
     }
 
     #[test]

@@ -363,7 +363,9 @@ Options:
   -V, --version
           Print version
 
-Docs and releases: https://crates.io/crates/keynot
+Format reference: https://github.com/devjgm/keynot/blob/main/FORMAT.md
+Usage guide:      https://github.com/devjgm/keynot/blob/main/USAGE.md
+Releases:         https://crates.io/crates/keynot
 
 "#]]);
 }

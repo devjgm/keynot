@@ -58,7 +58,18 @@ impl Presentation {
         let slides: Vec<Slide> = split
             .slides
             .iter()
-            .map(|raw| Slide::parse_columns(&raw.columns))
+            .map(|raw| {
+                let mut slide = Slide::parse_columns(&raw.columns);
+                slide.line = raw.line;
+                // Block lines come back column-relative; make them
+                // file-absolute using each column's own start line.
+                for (lines, column_start) in slide.block_lines.iter_mut().zip(&raw.column_lines) {
+                    for line in lines {
+                        *line += column_start - 1;
+                    }
+                }
+                slide
+            })
             .collect();
         if slides.is_empty() {
             return Err(ParseError::NoSlides);
@@ -78,6 +89,23 @@ impl Presentation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slides_remember_their_source_lines() {
+        let src = "---\ntitle: T\n---\n\n# One\n\n---\n\n# Two\n";
+        let p = Presentation::parse(src).unwrap();
+        assert_eq!(p.slides[0].line, 4);
+        assert_eq!(p.slides[1].line, 8);
+    }
+
+    #[test]
+    fn crlf_sources_report_the_same_line_numbers() {
+        let unix = Presentation::parse("# A\n\nbody\n---\n# B\n").unwrap();
+        let dos = Presentation::parse("# A\r\n\r\nbody\r\n---\r\n# B\r\n").unwrap();
+        assert_eq!(unix.slides[1].line, dos.slides[1].line);
+        assert_eq!(unix.slides[0].block_lines, dos.slides[0].block_lines);
+        assert_eq!(dos.slides[0].block_lines, vec![vec![1, 3]]);
+    }
 
     #[test]
     fn parses_frontmatter_and_slides() {

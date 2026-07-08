@@ -37,6 +37,10 @@ impl FakeTerminal {
     /// terminal claims kitty graphics support, as Ghostty or kitty would;
     /// otherwise it only reports a cell size (enough for halfblocks).
     fn spawn(dir: &Path, args: &[&str], kitty: bool) -> Self {
+        Self::spawn_with_env(dir, args, kitty, &[])
+    }
+
+    fn spawn_with_env(dir: &Path, args: &[&str], kitty: bool, envs: &[(&str, &str)]) -> Self {
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -49,6 +53,9 @@ impl FakeTerminal {
         cmd.args(args);
         cmd.cwd(dir);
         cmd.env("TERM", "xterm-256color");
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
         let child = pty.slave.spawn_command(cmd).unwrap();
         drop(pty.slave);
 
@@ -58,17 +65,19 @@ impl FakeTerminal {
         let output = Arc::new(Mutex::new(Vec::new()));
 
         // The terminal side: accumulate everything keynot writes and
-        // answer each probe once.
+        // answer every occurrence of each probe (re-entering the TUI
+        // after `!` or `e` queries the terminal again).
         let reply_output = Arc::clone(&output);
         let reply_writer = Arc::clone(&writer);
         std::thread::spawn(move || {
-            let mut probes: Vec<(&[u8], &[u8])> = vec![
-                (b"\x1b[c", b"\x1b[?62c"),       // primary device attributes
-                (b"\x1b[16t", b"\x1b[6;20;10t"), // cell size: 20px by 10px
-                (b"\x1b[5n", b"\x1b[0n"),        // device status report
+            let mut probes: Vec<(&[u8], &[u8], usize)> = vec![
+                (b"\x1b[c", b"\x1b[?62c", 0),       // primary device attributes
+                (b"\x1b[16t", b"\x1b[6;20;10t", 0), // cell size: 20px by 10px
+                (b"\x1b[5n", b"\x1b[0n", 0),        // device status report
+                (b"\x1b[6n", b"\x1b[1;1R", 0),      // cursor position report
             ];
             if kitty {
-                probes.insert(0, (b"\x1b_Gi=31", b"\x1b_Gi=31;OK\x1b\\"));
+                probes.insert(0, (b"\x1b_Gi=31", b"\x1b_Gi=31;OK\x1b\\", 0));
             }
             let mut buf = [0u8; 65536];
             loop {
@@ -81,16 +90,15 @@ impl FakeTerminal {
                     out.extend_from_slice(&buf[..n]);
                     out.clone()
                 };
-                probes.retain(|(probe, reply)| {
-                    if contains(&out, probe) {
+                for (probe, reply, answered) in &mut probes {
+                    let seen = out.windows(probe.len()).filter(|w| w == probe).count();
+                    while *answered < seen {
                         let mut w = reply_writer.lock().unwrap();
                         let _ = w.write_all(reply);
                         let _ = w.flush();
-                        false
-                    } else {
-                        true
+                        *answered += 1;
                     }
-                });
+                }
             }
         });
 
@@ -354,6 +362,63 @@ fn check_in_a_terminal_reports_whether_slides_fit() {
     term.wait_for(b"fits:", "the terminal-size verdict");
     term.wait_for(b"100x30", "measured against the pty size");
     term.wait_for(b"yes", "one short slide fits");
+}
+
+#[test]
+fn edit_key_runs_the_editor_and_reloads() {
+    // EDITOR is a script that appends a slide; pressing `e` must run
+    // it against the deck and reload, so the new slide count shows.
+    let dir = tempfile::tempdir().unwrap();
+    fs_err::write(dir.path().join("deck.keynot"), "# One\n").unwrap();
+    let editor = dir.path().join("fake-editor.sh");
+    fs_err::write(
+        &editor,
+        "#!/bin/sh\nprintf -- '---\\n# Added\\n' >> \"$1\"\n",
+    )
+    .unwrap();
+    let mut perms = fs_err::metadata(&editor).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs_err::set_permissions(&editor, perms).unwrap();
+
+    let term = FakeTerminal::spawn_with_env(
+        dir.path(),
+        &["play", "deck.keynot"],
+        false,
+        &[("EDITOR", editor.to_str().unwrap())],
+    );
+    term.wait_for(b"1/1", "the one-slide deck");
+    term.send(b"e");
+    term.wait_for(b"1/2", "the reloaded two-slide deck");
+    term.quit();
+}
+
+#[test]
+fn edit_invokes_recognized_editors_with_the_line_arg() {
+    // The fake editor is named `vim`, so keynot passes its +N syntax;
+    // the script records its argv, pinning flag order, line, and path.
+    let dir = tempfile::tempdir().unwrap();
+    fs_err::write(dir.path().join("deck.keynot"), "# One\n\npara\n").unwrap();
+    let editor = dir.path().join("vim");
+    fs_err::write(&editor, "#!/bin/sh\necho \"$@\" > args.txt\n").unwrap();
+    let mut perms = fs_err::metadata(&editor).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs_err::set_permissions(&editor, perms).unwrap();
+
+    let term = FakeTerminal::spawn_with_env(
+        dir.path(),
+        &["play", "deck.keynot"],
+        false,
+        &[("EDITOR", editor.to_str().unwrap())],
+    );
+    term.wait_for(b"One", "the slide");
+    term.send(b"e");
+    term.wait_for(b"1/1", "the show resumed");
+    term.quit();
+
+    let args = fs_err::read_to_string(dir.path().join("args.txt")).unwrap();
+    assert_eq!(args.trim(), "+1 deck.keynot");
 }
 
 #[test]

@@ -48,6 +48,9 @@ pub struct ColumnSpan {
     /// Rows (indices into the slide text) where this column has visible
     /// content: the domain of the speaker's line highlight.
     pub non_blank: Vec<usize>,
+    /// `(first_row, source_line)` of each top-level block, in row
+    /// order, so the player can map a screen row back to the file.
+    pub block_rows: Vec<(usize, usize)>,
 }
 
 /// A rendered slide: styled text plus the image areas reserved in it
@@ -69,14 +72,17 @@ const COLUMN_GUTTER: usize = 3;
 pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> RenderedSlide {
     let width = width.max(10);
     let n = slide.columns.len().max(1);
+    let no_lines = Vec::new();
     if n == 1 {
         let empty = Vec::new();
         let blocks = slide.columns.first().unwrap_or(&empty);
-        let (lines, images) = render_column(blocks, ctx, width);
+        let block_lines = slide.block_lines.first().unwrap_or(&no_lines);
+        let (lines, images, block_rows) = render_column(blocks, block_lines, ctx, width);
         let columns = vec![ColumnSpan {
             x: 0,
             width,
             non_blank: non_blank_rows(&lines),
+            block_rows,
         }];
         return RenderedSlide {
             text: Text::from(lines),
@@ -95,7 +101,9 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
     let mut x_offset = 0usize;
     for (i, blocks) in slide.columns.iter().enumerate() {
         let col_width = if i == n - 1 { last_width } else { base_width };
-        let (lines, mut placements) = render_column(blocks, ctx, col_width);
+        let block_lines = slide.block_lines.get(i).unwrap_or(&no_lines);
+        let (lines, mut placements, block_rows) =
+            render_column(blocks, block_lines, ctx, col_width);
         for placement in &mut placements {
             placement.x += x_offset as u16;
         }
@@ -104,6 +112,7 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
             x: x_offset,
             width: col_width,
             non_blank: non_blank_rows(&lines),
+            block_rows,
         });
         rendered.push((lines, col_width));
         x_offset += col_width + COLUMN_GUTTER;
@@ -196,15 +205,30 @@ fn non_blank_rows(lines: &[Line<'static>]) -> Vec<usize> {
 }
 
 /// Render one column of blocks at `width`, returning its lines (trailing
-/// blanks trimmed, image rows preserved) and image placements.
+/// blanks trimmed, image rows preserved), image placements, and each
+/// top-level block's `(first_row, source_line)` when lines are known.
 fn render_column(
     blocks: &[Block],
+    block_lines: &[usize],
     ctx: &RenderContext,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<ImagePlacement>) {
+) -> (Vec<Line<'static>>, Vec<ImagePlacement>, Vec<(usize, usize)>) {
     let mut lines = Vec::new();
     let mut images = Vec::new();
-    render_blocks_spaced(blocks, ctx, width, &mut lines, true, Some(&mut images));
+    let mut block_rows = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        if let Some(line) = block_lines.get(i) {
+            block_rows.push((lines.len(), *line));
+        }
+        render_blocks_spaced(
+            std::slice::from_ref(block),
+            ctx,
+            width,
+            &mut lines,
+            true,
+            Some(&mut images),
+        );
+    }
     // Trim trailing blanks, but never into rows reserved for images.
     let reserved = images
         .iter()
@@ -223,7 +247,7 @@ fn render_column(
             assert_eq!(line.width(), 0, "image rows must be blank");
         }
     }
-    (lines, images)
+    (lines, images, block_rows)
 }
 
 /// Drop empty lines from the end.
@@ -298,11 +322,13 @@ fn render_table(
     let overhead = 3 * columns + 1;
     let available = width.saturating_sub(overhead).max(columns * MIN_COLUMN);
     while widths.iter().sum::<usize>() > available {
-        let widest = widths
+        let (widest, width) = widths
             .iter()
-            .position(|w| Some(w) == widths.iter().max())
-            .expect("non-empty");
-        if widths[widest] <= MIN_COLUMN {
+            .copied()
+            .enumerate()
+            .max_by_key(|&(_, w)| w)
+            .expect("tables have at least one column");
+        if width <= MIN_COLUMN {
             break;
         }
         widths[widest] -= 1;

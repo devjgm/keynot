@@ -8,6 +8,12 @@ semantic versioning.
 
 ### Added
 
+- Press `e` during a show to open the deck in `$VISUAL`/`$EDITOR` at
+  the line you are looking at (the highlighted block, or the top of
+  the scrolled view); exiting the editor reloads from disk and
+  resumes where you were. Knows the line-jump syntax for the vi/emacs
+  family, VS Code, Sublime, and TextMate; falls back to `vi`
+  (`notepad` on Windows).
 - GFM tables render with rounded borders, bold headers, and per-column
   alignment; columns size to their content and word-wrap when the
   table is wider than the slide.
@@ -53,7 +59,18 @@ semantic versioning.
 - FORMAT.md documents every frontmatter default, enforced by tests that
   fail when the docs drift from the code.
 
+### Fixed
+
+- A set-but-empty `VISUAL` no longer shadows a valid `EDITOR` when
+  resolving the `e` key's editor.
+- Editor commands with quoted arguments or spaces in the program path
+  now parse shell-style.
+
 ### Changed
+
+- Usage documentation (subcommands, keys, player behavior) moved from
+  FORMAT.md to a new USAGE.md; FORMAT.md is now strictly about the
+  file format.
 
 - The dark theme's code panel darkened to `#141414` so it stands out
   against the gradient background.
