@@ -157,6 +157,29 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
     }
 }
 
+/// The tallest slide when rendered `width` cells wide with no terminal
+/// (each picture counts as its one-line placeholder): `(rows, index)`
+/// with a 1-based slide index. `keynot check` reports this so an
+/// author knows what to expect at show time.
+pub fn tallest_slide(
+    slides: &[Slide],
+    theme: &Theme,
+    highlighter: &Highlighter,
+    width: usize,
+) -> (usize, usize) {
+    let ctx = RenderContext {
+        theme,
+        highlighter,
+        image_sizer: None,
+    };
+    slides
+        .iter()
+        .enumerate()
+        .map(|(i, slide)| (render_slide(slide, &ctx, width).text.height(), i + 1))
+        // The first slide wins ties, so the report reads naturally.
+        .fold((0, 0), |best, cur| if cur.0 > best.0 { cur } else { best })
+}
+
 /// Rows where a column has visible content (its trimmed lines are
 /// top-aligned, so a row index within the column is a row index in the
 /// joined slide text).

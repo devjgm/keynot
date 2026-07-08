@@ -421,6 +421,15 @@ changing slides) turns it off. The `highlight:` frontmatter key picks the look:
 | `bar` | an accent-colored bar behind the line (the default)           |
 | `dim` | the line keeps full brightness while everything else dims     |
 
+Slides are vertically centered when they fit. A slide taller than the
+terminal is clipped at the bottom, with a dim marker in the corner
+counting the hidden lines. Walking the line highlight (down/up)
+scrolls the view to follow the bar, so an overflowing slide is still
+fully presentable; Esc (or changing slides) returns to the top. Images
+draw only while fully in view. `keynot check` reports the tallest
+slide at a reference 80 columns, so none of this surprises you at show
+time (`---` remains the pagination tool).
+
 The outline lists every slide by its first heading (or first line of
 text). Typing a number selects that slide live as you type -- for slide
 12, type `1` then `2` then enter; arrows or esc clear the pending

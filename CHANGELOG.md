@@ -6,6 +6,15 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Overflowing slides scroll: on a slide taller than the terminal,
+  walking the line highlight (down/up) moves the view to follow the
+  bar, with dim markers showing how many lines are hidden past each
+  edge. Esc (or changing slides) returns to the top.
+- `keynot check` reports the tallest slide and its height at a
+  reference 80 columns, so overflow is no surprise at show time.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added

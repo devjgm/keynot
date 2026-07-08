@@ -40,6 +40,7 @@ Play it with: keynot play [..]demo-talk.keynot
   theme:  dark
   slides: 5
   notes:  1
+  tallest: slide 2, 14 lines (at 80 columns)
 
 "#]]);
 }
@@ -91,6 +92,7 @@ fn check_reports_metadata() {
   theme:  dark
   slides: 2
   notes:  1
+  tallest: slide 1, 2 lines (at 80 columns)
 
 "#]]);
 }

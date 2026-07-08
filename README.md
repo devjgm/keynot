@@ -9,8 +9,9 @@ ________________
    ___|__|___
 ```
 
-Terminal slide presentations from a single markdown file. Like Keynote,
-but it's not, and it lives in your terminal, like you.
+**Presenting Markdown.** Terminal slide presentations from a single
+markdown file. Like Keynote, but it's not, and it lives in your
+terminal, like you.
 
 - One `.keynot` file per presentation: YAML frontmatter for metadata and
   theming, slides in plain markdown separated by `---`, HTML comments as

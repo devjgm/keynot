@@ -148,7 +148,8 @@ fn frontmatter_line(source: &str, key: &str) -> Option<usize> {
 
 fn check(file: PathBuf) -> Result<()> {
     let highlighter = Highlighter::new();
-    let presentation = app::load(&file, &highlighter)?.presentation;
+    let loaded = app::load(&file, &highlighter)?;
+    let presentation = loaded.presentation;
     // Unknown keys are strict here and only here: check is the linter,
     // so typos surface; play tolerates them, so a deck written for a
     // newer keynot still opens on an older one.
@@ -186,5 +187,10 @@ fn check(file: PathBuf) -> Result<()> {
     if notes > 0 {
         println!("  notes:  {notes}");
     }
+    // How much vertical room the deck wants, so an overflow (and the
+    // in-show scroll) is no surprise at show time.
+    let (rows, tallest) =
+        keynot::render::tallest_slide(&presentation.slides, &loaded.theme, &highlighter, 80);
+    println!("  tallest: slide {tallest}, {rows} lines (at 80 columns)");
     Ok(())
 }

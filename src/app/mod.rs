@@ -244,6 +244,10 @@ struct App {
     /// Speaker's line highlight: (column, index into that column's
     /// non-blank rendered lines), styled per the `highlight:` key.
     highlight: Option<(usize, usize)>,
+    /// Rows scrolled off the top of an overflowing slide. Nonzero only
+    /// while a highlight is active: the view follows the highlight
+    /// cursor, and clearing the highlight returns to the top.
+    scroll: u16,
     /// Fresh image decodes from a reload, arriving from a worker thread
     /// (network fetches must never block the draw loop).
     pending_images: Option<std::sync::mpsc::Receiver<HashMap<String, images::Decoded>>>,
@@ -294,6 +298,7 @@ impl App {
             outline_input: None,
             help: false,
             highlight: None,
+            scroll: 0,
             pending_images: None,
             shell_requested: false,
             effect: None,
@@ -751,9 +756,26 @@ impl App {
             None => None,
         };
 
-        let height = (cache.rendered.text.height() as u16).min(content.height);
+        let total = cache.rendered.text.height() as u16;
+        let height = total.min(content.height);
         let y = content.y + (content.height - height) / 2;
         let slide_area = Rect::new(content.x, y, content.width, height);
+
+        // The view follows the highlight cursor on overflowing slides;
+        // without a highlight it is always at the top (Esc, changing
+        // slides, and reload all land here with no highlight set).
+        match self.highlight {
+            Some((col, pos)) => {
+                let row = cache.rendered.columns[col].non_blank[pos] as u16;
+                if row < self.scroll {
+                    self.scroll = row;
+                } else if row >= self.scroll + slide_area.height {
+                    self.scroll = row + 1 - slide_area.height;
+                }
+            }
+            None => self.scroll = 0,
+        }
+        self.scroll = self.scroll.min(total.saturating_sub(slide_area.height));
 
         if let Some((col, pos)) = self.highlight {
             // Highlighting styles a copy so the cached text stays pristine.
@@ -766,7 +788,7 @@ impl App {
                 span,
                 span.non_blank[pos],
             );
-            frame.render_widget(Paragraph::new(text), slide_area);
+            frame.render_widget(Paragraph::new(text).scroll((self.scroll, 0)), slide_area);
         } else {
             frame.render_widget(&cache.paragraph, slide_area);
         }
@@ -796,21 +818,61 @@ impl App {
             let Some(protocol) = self.images.protocol_mut(&placement.source) else {
                 continue;
             };
+            // Only fully visible images draw. Cropping is not an
+            // option (the terminal protocols re-encode to the target
+            // rect, scaling instead of cropping, and kitty would
+            // retransmit pixels every scroll step), so a partially
+            // scrolled image leaves its reserved rows blank.
+            let line = placement.line as u16;
+            if line < self.scroll || line + placement.height > self.scroll + slide_area.height {
+                continue;
+            }
             let width = placement
                 .width
                 .min(slide_area.width.saturating_sub(placement.x));
             let x = slide_area.x + placement.x;
-            let y = slide_area.y + placement.line as u16;
-            let height = placement.height.min(slide_area.bottom().saturating_sub(y));
-            if height == 0 || y >= slide_area.bottom() {
-                continue;
-            }
+            let y = slide_area.y + line - self.scroll;
             frame.render_stateful_widget(
                 StatefulImage::default(),
-                Rect::new(x, y, width, height),
+                Rect::new(x, y, width, placement.height),
                 protocol,
             );
         }
+
+        // An overflowing slide says how much is hidden past each edge
+        // instead of clipping silently. Drawn last so neither images
+        // nor effects hide it.
+        if self.scroll > 0 {
+            self.draw_hidden_marker(frame, slide_area, self.scroll, '\u{2191}', slide_area.top());
+        }
+        let below = total.saturating_sub(self.scroll + slide_area.height);
+        if below > 0 {
+            self.draw_hidden_marker(
+                frame,
+                slide_area,
+                below,
+                '\u{2193}',
+                slide_area.bottom() - 1,
+            );
+        }
+    }
+
+    /// A dim `<arrow> N more lines` note at the right edge of row `y`.
+    fn draw_hidden_marker(&self, frame: &mut Frame, area: Rect, hidden: u16, arrow: char, y: u16) {
+        let label = format!(
+            " {arrow} {hidden} more line{} ",
+            if hidden == 1 { "" } else { "s" }
+        );
+        let width = (label.width() as u16).min(area.width);
+        let x = area.right().saturating_sub(width);
+        frame.buffer_mut().set_string(
+            x,
+            y,
+            &label,
+            Style::default()
+                .fg(self.theme.text)
+                .add_modifier(Modifier::DIM),
+        );
     }
 
     fn draw_outline(&self, frame: &mut Frame, content: Rect) {
@@ -1512,6 +1574,128 @@ mod tests {
             HashMap::new(),
             PlayOptions::default(),
         )
+    }
+
+    /// A deck of 20 one-line paragraphs: ~40 rendered rows.
+    fn tall_deck() -> String {
+        (1..=20).map(|i| format!("point{i}\n\n")).collect()
+    }
+
+    #[test]
+    fn walking_the_highlight_scrolls_an_overflowing_slide() {
+        let mut app = test_app(&tall_deck());
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(
+            !buffer_text(&terminal).contains("point20"),
+            "starts clipped"
+        );
+
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down);
+        }
+        let terminal = draw(&mut app, Duration::ZERO);
+        let screen = buffer_text(&terminal);
+        assert!(app.scroll > 0, "the view followed the bar");
+        assert!(screen.contains("point20"), "the last line came into view");
+        assert!(
+            screen.contains('\u{2191}'),
+            "hidden-above marker:\n{screen}"
+        );
+        assert!(!screen.contains('\u{2193}'), "nothing hidden below anymore");
+    }
+
+    #[test]
+    fn walking_back_up_scrolls_home() {
+        let mut app = test_app(&tall_deck());
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down);
+        }
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Up);
+        }
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert_eq!(app.scroll, 0);
+        assert!(buffer_text(&terminal).contains("point1"));
+    }
+
+    #[test]
+    fn esc_returns_an_overflowing_slide_to_the_top() {
+        let mut app = test_app(&tall_deck());
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down);
+        }
+        draw(&mut app, Duration::ZERO);
+        assert!(app.scroll > 0);
+        press(&mut app, KeyCode::Esc);
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert_eq!(app.scroll, 0);
+        assert!(buffer_text(&terminal).contains("point1"));
+    }
+
+    #[test]
+    fn changing_slides_resets_the_scroll() {
+        let deck = format!("{}---\n# Next\n", tall_deck());
+        let mut app = test_app(&deck);
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..20 {
+            press(&mut app, KeyCode::Down);
+        }
+        draw(&mut app, Duration::ZERO);
+        assert!(app.scroll > 0);
+        press(&mut app, KeyCode::Char('n'));
+        draw(&mut app, Duration::from_millis(1000));
+        let terminal = draw(&mut app, Duration::from_millis(1000));
+        assert_eq!(app.scroll, 0);
+        assert!(buffer_text(&terminal).contains("Next"));
+    }
+
+    #[test]
+    fn fitting_slides_never_scroll() {
+        let mut app = test_app("a\n\nb\n\nc\n");
+        draw(&mut app, Duration::ZERO);
+        for _ in 0..10 {
+            press(&mut app, KeyCode::Down);
+        }
+        draw(&mut app, Duration::ZERO);
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn partially_scrolled_images_do_not_draw() {
+        // Text pushes the image below the fold of the test terminal; an
+        // image that is not fully visible leaves its rows blank.
+        let text: String = (1..=12).map(|i| format!("t{i}\n\n")).collect();
+        let deck = format!("{text}![p](x.png)\n");
+        let mut app = test_app_with_image(&deck, "x.png");
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(
+            image_columns(&terminal).is_empty(),
+            "image below the fold stays hidden"
+        );
+    }
+
+    #[test]
+    fn overflowing_slides_show_how_much_is_hidden() {
+        // ~40 rows of content on a 24-row test terminal.
+        let deck: String = (1..=20).map(|i| format!("line{i}\n\n")).collect();
+        let mut app = test_app(&deck);
+        let terminal = draw(&mut app, Duration::ZERO);
+        let screen = buffer_text(&terminal);
+        assert!(
+            screen.contains("more lines"),
+            "overflow indicator shown:\n{screen}"
+        );
+        assert!(screen.contains('\u{2193}'), "with a downward arrow");
+    }
+
+    #[test]
+    fn fitting_slides_have_no_overflow_indicator() {
+        let mut app = test_app("# Short\n\nslide\n");
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(!buffer_text(&terminal).contains("more line"));
     }
 
     #[test]
