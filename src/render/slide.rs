@@ -722,6 +722,45 @@ mod tests {
     }
 
     #[test]
+    fn image_in_third_column_is_offset_past_two_columns() {
+        let theme = Theme::dark();
+        let slide = Slide::parse_columns(&[
+            "one".to_string(),
+            "two".to_string(),
+            "![c](c.png)".to_string(),
+        ]);
+        let sizer = |_: &str| Some((4u16, 3u16));
+        let ctx = RenderContext {
+            theme: &theme,
+            highlighter: highlighter(),
+            image_sizer: Some(&sizer),
+        };
+        // width 36: usable 30, three 10-wide columns; column 3 starts at
+        // 26, and a 4-wide image centered in 10 sits at +3.
+        let rendered = render_slide(&slide, &ctx, 36);
+        assert_eq!(rendered.images.len(), 1);
+        assert_eq!(rendered.images[0].x, 29, "26 + (10 - 4) / 2");
+    }
+
+    #[test]
+    fn empty_heading_reserves_a_row_for_column_alignment() {
+        // The tour's three-column slide uses a bare `##` so a heading-less
+        // column's content aligns with its neighbors' first paragraphs.
+        let with_heading = render_cols(&["## Title\n\nbody", "##\n\nbody"], 23);
+        let lines: Vec<String> = with_heading
+            .text
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        let title_row = lines.iter().position(|l| l.contains("Title")).unwrap();
+        let body_row = lines.iter().position(|l| l.contains("body")).unwrap();
+        assert!(body_row > title_row, "bodies sit below the heading row");
+        // Both columns' bodies share one row.
+        assert_eq!(lines[body_row].matches("body").count(), 2, "{lines:?}");
+    }
+
+    #[test]
     fn single_column_image_is_centered() {
         let rendered = render_with_images("![c](c.png)", 40, (10, 4));
         assert_eq!(rendered.images[0].x, 15, "(40 - 10) / 2");

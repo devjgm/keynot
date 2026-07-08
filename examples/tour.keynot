@@ -3,12 +3,11 @@ title: A Tour of keynot
 author: The keynot Authors
 date: 2026-07-07
 theme: dark
-transition: sweep
 ---
 
 # A Tour of keynot
 
-Everything the format supports, one slide at a time
+Everything the format supports, in a few slides
 
 <!-- Welcome everyone. This note is only visible in the source. -->
 
@@ -23,40 +22,7 @@ Links look like this: [ratatui](https://ratatui.rs).
 
 Force a line break<br>with the br tag.
 
----
-
-## Lists
-
-- Plain bullets
-- Nested bullets
-  - Two spaces of indent
-  - As deep as you like
-    - Really
-- Ordered too:
-  1. First
-  2. Second
-- [x] Task lists render their checkboxes
-- [ ] Like so
-
----
-
-## Code
-
-```rust
-/// Fenced blocks get syntax highlighting.
-fn fib(n: u64) -> u64 {
-    match n {
-        0 | 1 => n,
-        _ => fib(n - 1) + fib(n - 2),
-    }
-}
-```
-
-```python
-print("many languages work")
-```
-
----
+|||
 
 ## Quotes and rules
 
@@ -65,7 +31,50 @@ print("many languages work")
 
 ***
 
-That rule above is three stars, since `---` separates slides.
+That rule above is from `***`, since `---` separates slides.
+
+By the way: this slide is two columns, split by a `|||` line.
+
+---
+
+## Lists
+
+- Plain bullets
+- Nested bullets
+  - Two spaces of indent
+- Ordered too:
+  1. First
+  2. Second
+- [x] Task lists render their checkboxes
+- [ ] Like so
+
+|||
+
+## Code
+
+Fenced blocks get syntax highlighting:
+
+```rust
+fn main() {
+    let x = 6 * 7;
+    println!("{x}");
+}
+```
+
+|||
+
+##
+
+A `---` inside a code fence never splits the slide:
+
+```yaml
+---
+this: is safe
+---
+```
+
+The blank `##` above pushes this column down to align with its
+neighbors.
 
 ---
 
@@ -77,22 +86,11 @@ and URLs both work; URLs are fetched when the presentation starts.
 
 Inline images like ![this one](ferris.png) show a placeholder.
 
-This slide is split into two columns with `|||` -- Ferris gets the
-right one to himself.
+Ferris gets the right column to himself.
 
 |||
 
 ![Ferris, the Rust mascot](https://rustacean.net/assets/rustacean-flat-happy.png)
-
----
-
-## A --- inside code is safe
-
-```yaml
----
-this: does not split the slide
----
-```
 
 ---
 

@@ -615,24 +615,6 @@ impl App {
             frame.render_widget(&cache.paragraph, slide_area);
         }
 
-        for placement in &cache.rendered.images {
-            let Some(protocol) = self.images.protocol_mut(&placement.source) else {
-                continue;
-            };
-            let width = placement.width.min(slide_area.width);
-            let x = slide_area.x + (slide_area.width - width) / 2;
-            let y = slide_area.y + placement.line as u16;
-            let height = placement.height.min(slide_area.bottom().saturating_sub(y));
-            if height == 0 || y >= slide_area.bottom() {
-                continue;
-            }
-            frame.render_stateful_widget(
-                StatefulImage::default(),
-                Rect::new(x, y, width, height),
-                protocol,
-            );
-        }
-
         if let Some((_, effect)) = &mut self.outgoing {
             frame.render_effect(effect, slide_area, elapsed.into());
             if effect.done() {
@@ -644,6 +626,30 @@ impl App {
             if effect.done() {
                 self.effect = None;
             }
+        }
+
+        // Images are drawn after transition effects, never before: the
+        // kitty/iTerm2 protocols pack their escape payload (including a
+        // transmit-once sequence) into single buffer cells, and an effect
+        // rewriting such a cell would silently swallow the image.
+        for placement in &cache.rendered.images {
+            let Some(protocol) = self.images.protocol_mut(&placement.source) else {
+                continue;
+            };
+            let width = placement
+                .width
+                .min(slide_area.width.saturating_sub(placement.x));
+            let x = slide_area.x + placement.x;
+            let y = slide_area.y + placement.line as u16;
+            let height = placement.height.min(slide_area.bottom().saturating_sub(y));
+            if height == 0 || y >= slide_area.bottom() {
+                continue;
+            }
+            frame.render_stateful_widget(
+                StatefulImage::default(),
+                Rect::new(x, y, width, height),
+                protocol,
+            );
         }
     }
 
@@ -1151,8 +1157,8 @@ mod tests {
 
     #[test]
     fn slide_transition_promotes_enter_after_exit() {
-        // Default transition is `slide`, which has an exit phase.
-        let mut app = test_app("# A\n---\n# B\n");
+        // The slide transition has an exit phase.
+        let mut app = test_app("---\ntransition: slide\n---\n# A\n---\n# B\n");
         press(&mut app, KeyCode::Right);
         assert!(app.outgoing.is_some(), "exit effect starts on goto");
         assert!(app.pending_enter.is_some());
@@ -1171,7 +1177,7 @@ mod tests {
 
     #[test]
     fn navigating_mid_animation_skips_the_exit_phase() {
-        let mut app = test_app("# A\n---\n# B\n---\n# C\n");
+        let mut app = test_app("---\ntransition: slide\n---\n# A\n---\n# B\n---\n# C\n");
         press(&mut app, KeyCode::Right);
         assert!(app.outgoing.is_some());
         press(&mut app, KeyCode::Right);
@@ -1281,6 +1287,86 @@ mod tests {
         }
     }
 
+    /// An app with real (halfblock) image support: a fixed-font picker
+    /// instead of a terminal probe, and `source` pre-decoded to a plain
+    /// 60x40 px image (6x2 cells at the 10x20 test font).
+    fn test_app_with_image(src: &str, source: &str) -> App {
+        // halfblocks() uses a fixed 10x20 font, matching the cell math
+        // the tests below rely on.
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut decoded = HashMap::new();
+        let red = image::RgbImage::from_pixel(60, 40, image::Rgb([255, 0, 0]));
+        decoded.insert(source.to_string(), Ok(image::DynamicImage::ImageRgb8(red)));
+        App::new(
+            PathBuf::from("/nonexistent.keynot"),
+            LoadedPresentation {
+                presentation: Presentation::parse(src).unwrap(),
+                theme: Theme::dark(),
+            },
+            Highlighter::new(),
+            Some(picker),
+            decoded,
+            PlayOptions::default(),
+        )
+    }
+
+    /// Columns of cells the (all-red) test image was drawn into: cells
+    /// whose foreground or background is pure red. Nothing else in the
+    /// dark theme uses that color.
+    fn image_columns(terminal: &Terminal<TestBackend>) -> Vec<u16> {
+        let red = ratatui::style::Color::Rgb(255, 0, 0);
+        let buffer = terminal.backend().buffer();
+        let area = *buffer.area();
+        let mut cols = Vec::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &buffer[(x, y)];
+                if (cell.fg == red || cell.bg == red) && !cols.contains(&x) {
+                    cols.push(x);
+                }
+            }
+        }
+        cols.sort_unstable();
+        cols
+    }
+
+    #[test]
+    fn image_draws_centered_in_a_single_column_slide() {
+        let mut app = test_app_with_image("![pic](x.png)\n", "x.png");
+        let terminal = draw(&mut app, Duration::ZERO);
+        let cols = image_columns(&terminal);
+        assert_eq!(cols.len(), 6, "6-cell-wide image");
+        let mid = (cols[0] + cols[5]) / 2;
+        let screen_mid = terminal.backend().buffer().area().width / 2;
+        assert!(
+            mid.abs_diff(screen_mid) <= 2,
+            "roughly centered: {cols:?} vs screen middle {screen_mid}"
+        );
+    }
+
+    #[test]
+    fn image_draws_inside_its_column_not_slide_centered() {
+        // Text left, image right: the image must be drawn within the
+        // second column, never re-centered across the whole slide (which
+        // would paint it over the left column's text).
+        let mut app = test_app_with_image("LEFTTEXT\n|||\n![pic](x.png)\n", "x.png");
+        let terminal = draw(&mut app, Duration::ZERO);
+        let cols = image_columns(&terminal);
+        assert!(!cols.is_empty(), "image cells drawn");
+        let screen = buffer_text(&terminal);
+        let row = screen.lines().find(|l| l.contains("LEFTTEXT")).unwrap();
+        let text_end = row.find("LEFTTEXT").unwrap() + "LEFTTEXT".len();
+        assert!(
+            cols[0] as usize > text_end,
+            "image starts right of the left column text: cols {cols:?}, text ends {text_end}"
+        );
+        // And past the second column's start (content is ~72 wide on the
+        // 80-col test terminal: columns ~34 wide, column 2 starts ~38).
+        assert!(cols[0] >= 38, "in the second column: {cols:?}");
+        // The left column's text is not painted over.
+        assert!(screen.contains("LEFTTEXT"));
+    }
+
     #[test]
     fn two_column_slides_draw_both_columns() {
         let mut app = test_app("LEFTTEXT\n|||\nRIGHTTEXT\n");
@@ -1291,6 +1377,25 @@ mod tests {
             .find(|l| l.contains("LEFTTEXT"))
             .expect("left column on screen");
         assert!(row.contains("RIGHTTEXT"), "columns share a row: {row:?}");
+    }
+
+    #[test]
+    fn three_column_slides_draw_all_columns() {
+        let mut app = test_app("AAA\n|||\nBBB\n|||\nCCC\n");
+        let terminal = draw(&mut app, Duration::ZERO);
+        let row = buffer_text(&terminal)
+            .lines()
+            .find(|l| l.contains("AAA"))
+            .expect("first column on screen")
+            .to_string();
+        assert!(row.contains("BBB"), "second column shares the row: {row:?}");
+        assert!(row.contains("CCC"), "third column shares the row: {row:?}");
+        let (a, b, c) = (
+            row.find("AAA").unwrap(),
+            row.find("BBB").unwrap(),
+            row.find("CCC").unwrap(),
+        );
+        assert!(a < b && b < c, "columns in order: {row:?}");
     }
 
     #[test]

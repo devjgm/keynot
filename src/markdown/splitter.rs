@@ -6,8 +6,8 @@
 //!   `...`, as in YAML) is frontmatter.
 //! - After that, any line that is exactly `---` (ignoring surrounding
 //!   whitespace) separates slides, and `|||` separates columns within a
-//!   slide -- unless either appears inside a fenced code block (``` or
-//!   ~~~ fences, per CommonMark).
+//!   slide -- unless either appears inside a fenced code block (backtick
+//!   or tilde fences, per CommonMark).
 //! - Slides and columns that contain only whitespace are dropped.
 
 use super::ParseError;

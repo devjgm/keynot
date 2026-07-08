@@ -56,7 +56,7 @@ title: My Talk            # shown in the footer; defaults to the first heading
 author: Ada Lovelace      # shown in the footer
 date: 2026-07-07          # free-form text, shown in the footer
 theme: dark               # base theme: dark (default) or light
-transition: slide         # slide (default), coalesce, fade, sweep, or none
+transition: coalesce      # coalesce (default), slide, fade, sweep, or none
 highlight: bar            # speaker line highlight: bar (default) or dim
 code_theme: base16-eighties.dark   # syntect theme for code blocks
 footer: true              # set false to hide the footer entirely
@@ -121,8 +121,8 @@ with [syntect](https://github.com/trishume/syntect) also works: `base16-eighties
 
 | value      | effect                                                      |
 |------------|-------------------------------------------------------------|
-| `slide`    | push: the old slide slides out, the new one slides in, in the direction of navigation (the default) |
-| `coalesce` | characters dissolve into place                              |
+| `coalesce` | characters dissolve into place (the default)                |
+| `slide`    | push: the old slide slides out, the new one slides in, in the direction of navigation |
 | `fade`     | fade in from the background color                           |
 | `sweep`    | wipe across in the direction of navigation                  |
 | `none`     | instant switch                                              |

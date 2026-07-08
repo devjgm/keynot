@@ -34,11 +34,11 @@ pub struct Metadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transition {
-    /// Push: the old slide slides out, the new one slides in.
-    #[default]
-    Slide,
     /// Characters dissolve into place.
+    #[default]
     Coalesce,
+    /// Push: the old slide slides out, the new one slides in.
+    Slide,
     /// Fade in from the background color.
     Fade,
     /// Wipe across in the direction of navigation.
@@ -136,8 +136,8 @@ colors:
     }
 
     #[test]
-    fn default_transition_is_slide() {
-        assert_eq!(Metadata::default().transition, Transition::Slide);
+    fn default_transition_is_coalesce() {
+        assert_eq!(Metadata::default().transition, Transition::Coalesce);
     }
 
     #[test]

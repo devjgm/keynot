@@ -114,6 +114,14 @@ the CLI.
 Formatting uses a nightly-only rustfmt option (`group_imports`), so
 format with `cargo +nightly fmt`; CI checks it that way.
 
+Tests cover three layers: renderer unit tests assert exact styled
+output, app tests drive the real draw pipeline into ratatui's
+`TestBackend`, and `tests/pty.rs` runs the built binary inside a
+scripted pty that answers terminal probes -- verifying the actual
+escape-sequence stream (graphics protocol negotiation, image cell
+placement, screen restore) that only a real terminal would otherwise
+see.
+
 For diagnostics, set `KEYNOT_LOG` to a
 [tracing filter](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
 (e.g. `KEYNOT_LOG=debug`) and keynot writes a `keynot.log` in the current

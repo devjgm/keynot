@@ -38,7 +38,7 @@ Play it with: keynot play [..]demo-talk.keynot
   title:  demo talk
   author: Your Name
   theme:  dark
-  slides: 8
+  slides: 5
   notes:  1
 
 "#]]);
