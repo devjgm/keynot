@@ -23,18 +23,22 @@ impl TransitionEffects for Transition {
                 push_motion(forward),
                 10,
                 0,
-                theme.background,
+                theme.background.base(),
                 EffectTimer::from_ms(220, Interpolation::SineOut),
             )),
             Transition::Coalesce => Some(fx::coalesce(timer)),
-            Transition::Fade => Some(fx::fade_from(theme.background, theme.background, timer)),
+            Transition::Fade => Some(fx::fade_from(
+                theme.background.base(),
+                theme.background.base(),
+                timer,
+            )),
             Transition::Sweep => {
                 let motion = if forward {
                     Motion::LeftToRight
                 } else {
                     Motion::RightToLeft
                 };
-                Some(fx::sweep_in(motion, 10, 0, theme.background, timer))
+                Some(fx::sweep_in(motion, 10, 0, theme.background.base(), timer))
             }
             Transition::None => None,
         }
@@ -46,7 +50,7 @@ impl TransitionEffects for Transition {
                 push_motion(forward),
                 10,
                 0,
-                theme.background,
+                theme.background.base(),
                 EffectTimer::from_ms(160, Interpolation::SineIn),
             )),
             _ => None,

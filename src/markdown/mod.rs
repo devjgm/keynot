@@ -21,7 +21,8 @@ mod slide;
 mod splitter;
 
 pub use metadata::{
-    ColorOverrides, HighlightStyle, KNOWN_COLOR_KEYS, KNOWN_KEYS, Metadata, Transition,
+    BackgroundSpec, CodeStyle, ColorOverrides, GradientDirection, GradientSpec, HighlightStyle,
+    KNOWN_COLOR_KEYS, KNOWN_KEYS, Metadata, Transition,
 };
 pub use slide::{Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide};
 

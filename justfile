@@ -48,6 +48,12 @@ prerelease: ci
         echo "keynot $version is already on crates.io; bump the version in Cargo.toml first" >&2
         exit 1
     fi
+    # The release notes come from CHANGELOG.md, so the entry must exist
+    # (rename the Unreleased section when cutting a release).
+    if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+        echo "CHANGELOG.md has no entry for $version; add one first" >&2
+        exit 1
+    fi
     # Local checks (the `ci` dependency) only cover this machine; the
     # GitHub run for this exact commit also covers Windows and macOS.
     sha=$(git rev-parse HEAD)
@@ -90,4 +96,5 @@ release: prerelease
     cargo publish
     git tag "v$version"
     git push origin "v$version"
-    gh release create "v$version" --title "keynot $version" --generate-notes
+    notes=$(awk "/^## \[$version\]/{found=1; next} /^## /{found=0} found" CHANGELOG.md)
+    gh release create "v$version" --title "keynot $version" --notes "$notes"

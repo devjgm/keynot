@@ -63,6 +63,7 @@ theme: dark               # base theme: dark (default) or light
 transition: coalesce      # coalesce (default), slide, fade, sweep, or none
 highlight: bar            # speaker line highlight: bar (default) or dim
 code_theme: base16-eighties.dark   # syntect theme for code blocks
+code_style: window        # code block frame: window (default) or plain
 footer: true              # set false to hide the footer entirely
 colors:                   # per-element overrides, applied on top of the theme
   background: '#1e1e1e'
@@ -74,6 +75,26 @@ colors:                   # per-element overrides, applied on top of the theme
   code_background: '#252526'
 ---
 ```
+
+#### Defaults
+
+Every key is optional. What you get when one is omitted:
+
+| key          | default                                              |
+|--------------|------------------------------------------------------|
+| `title`      | the first heading in the deck (if any)               |
+| `author`     | none                                                 |
+| `date`       | none                                                 |
+| `theme`      | `dark`                                               |
+| `colors`     | the base theme's palette (see the color table below) |
+| `code_theme` | `Dark+` (dark theme), `InspiredGitHub` (light theme) |
+| `code_style` | `window`                                             |
+| `transition` | `coalesce`                                           |
+| `highlight`  | `bar`                                                |
+| `footer`     | `true`                                               |
+
+(These are pinned by a test, so this table cannot silently drift from
+the code.)
 
 Notes:
 
@@ -88,7 +109,7 @@ Notes:
 
 | theme   | look                                                            |
 |---------|-----------------------------------------------------------------|
-| `dark`  | VS Code Dark+: charcoal background, blue headings, yellow accents (the default) |
+| `dark`  | VS Code Dark+: charcoal gradient background, blue headings, yellow accents (the default) |
 | `light` | near-white background, dark text                                |
 
 `default` is accepted as an alias for `dark`.
@@ -100,17 +121,36 @@ values accept:
 - ANSI color names: `red`, `lightcyan`, `gray`, ...
 - 256-color palette indexes: `'42'`
 
-What each color controls:
+`background` also accepts a gradient: two or more hex stops and an
+optional direction:
 
-| key               | controls                                        |
-|-------------------|-------------------------------------------------|
-| `background`      | the whole screen                                |
-| `text`            | body text                                       |
-| `heading`         | `#` and `##` headings                           |
-| `accent`          | bullets, inline code, rules, UI highlights      |
-| `link`            | link text                                       |
-| `blockquote`      | the `|` bar in front of quotes                  |
-| `code_background` | background of code blocks and inline code       |
+```yaml
+colors:
+  background:
+    gradient: ['#0f0a1a', '#2b1d3a', '#0f0a1a']
+    direction: radial          # vertical (default), horizontal, radial
+```
+
+Gradient stops must be hex colors (ANSI names and palette indexes have
+no fixed RGB to interpolate). Stops are spaced evenly; `radial` runs
+from the center out to the corners. Truecolor terminals render
+gradients smoothly; 256-color terminals approximate them with visible
+banding -- the same degradation the built-in themes already have there.
+Where a single color is needed (the highlight bar's text, transition
+fills), keynot uses the gradient's midpoint.
+
+What each color controls, and its default in each base theme:
+
+| key               | controls                                   | dark      | light     |
+|-------------------|--------------------------------------------|-----------|-----------|
+| `background`      | the whole screen                           | `#2d2d30` to `#181818`, a vertical gradient | `#fafafa` |
+| `text`            | body text                                  | `#d4d4d4` | `#383a42` |
+| `heading`         | `#` and `##` headings                      | `#569cd6` | `#0550ae` |
+| `accent`          | bullets, inline code, rules, UI highlights | `#dcdcaa` | `#a626a4` |
+| `link`            | link text                                  | `#3794ff` | `#0969da` |
+| `blockquote`      | the `|` bar in front of quotes             | `#6a9955` | `#50a14f` |
+| `code_background` | background of code blocks and inline code  | `#141414` | `#eaeaeb` |
+| `code_border`     | the terminal-window frame around code blocks | `#454545` | `#c4c4c8` |
 
 `code_theme` selects the syntax-highlighting palette for fenced code
 blocks. `Dark+` (the dark default) ships with keynot; any theme bundled
@@ -269,8 +309,11 @@ checked boxes in bold accent, unchecked ones dimmed.
 
 ### Code blocks
 
-Fenced code blocks are syntax highlighted. Put the language after the
-opening fence:
+Fenced code blocks render as a small terminal window: a rounded border
+with traffic-light dots, the language name in the bottom edge, and a
+panel darker than the background. Prefer just the plain panel? Set
+`code_style: plain` in the frontmatter. Either way they are syntax
+highlighted; put the language after the opening fence:
 
 ````markdown
 ```rust

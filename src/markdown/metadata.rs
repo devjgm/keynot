@@ -13,6 +13,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "theme",
     "colors",
     "code_theme",
+    "code_style",
     "transition",
     "highlight",
     "footer",
@@ -27,6 +28,7 @@ pub const KNOWN_COLOR_KEYS: &[&str] = &[
     "link",
     "blockquote",
     "code_background",
+    "code_border",
 ];
 
 /// Metadata from the frontmatter at the top of a `.keynot` file.
@@ -52,6 +54,8 @@ pub struct Metadata {
     pub colors: ColorOverrides,
     /// Syntect theme used for code blocks (e.g. `base16-ocean.dark`).
     pub code_theme: Option<String>,
+    /// How fenced code blocks are framed.
+    pub code_style: CodeStyle,
     /// How slides change.
     pub transition: Transition,
     /// How the speaker's line highlight (up/down keys) is drawn.
@@ -92,18 +96,66 @@ pub enum HighlightStyle {
     Dim,
 }
 
+/// The `colors.background` value: a solid color string, or a gradient
+/// map (`background: { gradient: [...], direction: radial }`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum BackgroundSpec {
+    /// One color, exactly as before gradients existed.
+    Solid(String),
+    /// A gradient between hex stops.
+    Gradient(GradientSpec),
+}
+
+/// The explicit form of a background gradient.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GradientSpec {
+    /// Color stops, top/left/center first. At least two.
+    pub gradient: Vec<String>,
+    #[serde(default)]
+    pub direction: GradientDirection,
+}
+
+/// How fenced code blocks are drawn, the `code_style:` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeStyle {
+    /// A little terminal window: rounded border, traffic-light dots,
+    /// the language named in the bottom edge (the default).
+    #[default]
+    Window,
+    /// Just the padded panel, no frame.
+    Plain,
+}
+
+/// Which way a background gradient runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GradientDirection {
+    /// Top to bottom (the default).
+    #[default]
+    Vertical,
+    /// Left to right.
+    Horizontal,
+    /// Center outward to the corners.
+    Radial,
+}
+
 /// Optional color overrides. Values accept hex (`"#rrggbb"`), ANSI names
-/// (`"red"`, `"lightcyan"`), or indexed colors (`"42"`).
+/// (`"red"`, `"lightcyan"`), or indexed colors (`"42"`); gradient stops
+/// must be hex (see [`BackgroundSpec`]).
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default)]
 pub struct ColorOverrides {
-    pub background: Option<String>,
+    pub background: Option<BackgroundSpec>,
     pub text: Option<String>,
     pub heading: Option<String>,
     pub accent: Option<String>,
     pub link: Option<String>,
     pub blockquote: Option<String>,
     pub code_background: Option<String>,
+    pub code_border: Option<String>,
     /// Sub-keys keynot does not recognize, kept for `keynot check`.
     #[serde(flatten)]
     pub(crate) unknown: BTreeMap<String, serde_norway::Value>,
@@ -166,7 +218,10 @@ colors:
         assert_eq!(m.transition, Transition::Fade);
         assert_eq!(m.highlight, HighlightStyle::Dim);
         assert_eq!(m.footer, Some(false));
-        assert_eq!(m.colors.background.as_deref(), Some("#101020"));
+        assert_eq!(
+            m.colors.background,
+            Some(BackgroundSpec::Solid("#101020".into()))
+        );
         assert_eq!(m.colors.heading.as_deref(), Some("red"));
         assert_eq!(m.colors.text, None);
     }
@@ -229,6 +284,54 @@ colors:
     }
 
     #[test]
+    fn code_style_parses_and_rejects_unknowns() {
+        let m = Metadata::from_yaml("code_style: plain").unwrap();
+        assert_eq!(m.code_style, CodeStyle::Plain);
+        assert_eq!(Metadata::default().code_style, CodeStyle::Window);
+        assert!(Metadata::from_yaml("code_style: fancy").is_err());
+    }
+
+    #[test]
+    fn background_bare_list_is_rejected() {
+        // Only the explicit map form spells a gradient; a bare list is
+        // not valid (there is no shorthand).
+        assert!(Metadata::from_yaml("colors:\n  background: ['#000000', '#ffffff']\n").is_err());
+    }
+
+    #[test]
+    fn background_full_form_parses_with_direction() {
+        let yaml =
+            "colors:\n  background:\n    gradient: ['#000000', '#ffffff']\n    direction: radial\n";
+        let m = Metadata::from_yaml(yaml).unwrap();
+        match m.colors.background {
+            Some(BackgroundSpec::Gradient(spec)) => {
+                assert_eq!(spec.gradient.len(), 2);
+                assert_eq!(spec.direction, GradientDirection::Radial);
+            }
+            other => panic!("expected full gradient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn background_direction_defaults_to_vertical() {
+        let yaml = "colors:\n  background:\n    gradient: ['#000000', '#ffffff']\n";
+        let m = Metadata::from_yaml(yaml).unwrap();
+        match m.colors.background {
+            Some(BackgroundSpec::Gradient(spec)) => {
+                assert_eq!(spec.direction, GradientDirection::Vertical);
+            }
+            other => panic!("expected full gradient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn background_bad_direction_is_an_error() {
+        let yaml =
+            "colors:\n  background:\n    gradient: ['#000000', '#ffffff']\n    direction: spiral\n";
+        assert!(Metadata::from_yaml(yaml).is_err());
+    }
+
+    #[test]
     fn unknown_keys_parse_but_are_collected() {
         let m = Metadata::from_yaml("title: Hi\ntranstion: fade\n").unwrap();
         assert_eq!(m.title.as_deref(), Some("Hi"), "the deck still plays");
@@ -251,6 +354,7 @@ author: A
 date: D
 theme: dark
 code_theme: Dark+
+code_style: plain
 transition: fade
 highlight: dim
 footer: true
@@ -262,11 +366,12 @@ colors:
   link: cyan
   blockquote: green
   code_background: '#000000'
+  code_border: '#333333'
 ";
         let m = Metadata::from_yaml(yaml).unwrap();
         assert!(m.unknown_keys().is_empty());
-        assert_eq!(KNOWN_KEYS.len(), 9);
-        assert_eq!(KNOWN_COLOR_KEYS.len(), 7);
+        assert_eq!(KNOWN_KEYS.len(), 10);
+        assert_eq!(KNOWN_COLOR_KEYS.len(), 8);
     }
 
     #[test]

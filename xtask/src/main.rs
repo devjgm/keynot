@@ -20,7 +20,6 @@ const KEYNOT: &str = "target/debug/keynot";
 const OUT_DIR: &str = "assets/screenshots";
 /// The real image pasted over half-block cells (the tour's Ferris).
 const IMAGE_URL: &str = "https://rustacean.net/assets/rustacean-flat-happy.png";
-const THEME_BG: Rgba<u8> = Rgba([30, 30, 30, 255]);
 
 /// Project automation for keynot.
 #[derive(Parser)]
@@ -213,8 +212,10 @@ fn fetch_image(url: &str) -> DynamicImage {
 /// - Its cells are recognizable by color: Ferris's orange hues, plus
 ///   the pure black the half-block renderer paints for a PNG's
 ///   transparent pixels. True black occurs nowhere else -- the theme
-///   background is (30,30,30) and text is lighter. An opaque,
-///   non-orange image would go undetected and stay as half-blocks.
+///   backgrounds are lighter, as is text. An opaque, non-orange image
+///   would go undetected and stay as half-blocks.
+/// - The picture is at least 60x60 px: the code windows' traffic-light
+///   dots share Ferris's hues, but never at that size.
 fn composite_real_image(shot: &mut RgbaImage, real: &DynamicImage) -> bool {
     let (w, h) = shot.dimensions();
     let is_image_cell = |p: &Rgba<u8>| {
@@ -236,11 +237,21 @@ fn composite_real_image(shot: &mut RgbaImage, real: &DynamicImage) -> bool {
     if max_x == 0 {
         return false;
     }
+    // Small matches are not a picture: code windows' traffic-light dots
+    // are the same red-orange hues, but only a few pixels each.
+    if max_x - min_x < 60 || max_y - min_y < 60 {
+        return false;
+    }
 
+    // Erase to the theme background by sampling each row just left of
+    // the region: the default dark background is a vertical gradient,
+    // so rows differ but each row is one color.
     let margin = 4;
+    let sample_x = min_x.saturating_sub(margin + 1);
     for y in min_y.saturating_sub(margin)..(max_y + margin + 1).min(h) {
+        let row_bg = *shot.get_pixel(sample_x, y);
         for x in min_x.saturating_sub(margin)..(max_x + margin + 1).min(w) {
-            shot.put_pixel(x, y, THEME_BG);
+            shot.put_pixel(x, y, row_bg);
         }
     }
 

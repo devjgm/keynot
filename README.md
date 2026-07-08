@@ -114,6 +114,8 @@ available values:
 | `sweep`    | wipe across in the direction of navigation                  |
 | `none`     | instant switch                                              |
 
+Release history lives in [CHANGELOG.md](CHANGELOG.md).
+
 ## Development
 
 ```sh

@@ -3,11 +3,12 @@
 mod config;
 mod images;
 
+use crate::markdown::GradientDirection;
 use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Slide, Transition};
 use crate::render::{
     ColumnSpan, Highlighter, RenderContext, RenderedSlide, render_slide, split_spans_at,
 };
-use crate::theme::Theme;
+use crate::theme::{Background, Theme};
 use config::TransitionEffects;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use eyre::{Result, WrapErr, bail};
@@ -196,7 +197,9 @@ fn style_highlight(
             // becomes the background color, since arbitrary foregrounds
             // like syntax colors are unreadable on the accent);
             // bold/italic and such survive.
-            let bar = Style::default().fg(theme.background).bg(theme.accent);
+            let bar = Style::default()
+                .fg(theme.background.base())
+                .bg(theme.accent);
             let line = &mut text.lines[target];
             let base = line.style;
             let spans = std::mem::take(&mut line.spans);
@@ -615,10 +618,7 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame, elapsed: Duration) {
         let area = frame.area();
-        frame.render_widget(
-            Block::default().style(Style::default().bg(self.theme.background)),
-            area,
-        );
+        self.draw_background(frame, area);
         if area.height < 3 || area.width < 10 {
             return;
         }
@@ -679,6 +679,58 @@ impl App {
             rendered,
             paragraph,
         });
+    }
+
+    /// Fill `area` with the theme background: one block for a solid
+    /// color; per-row, per-column, or per-cell colors for a gradient.
+    fn draw_background(&self, frame: &mut Frame, area: Rect) {
+        let background = &self.theme.background;
+        if let Background::Solid(color) = background {
+            frame.render_widget(Block::default().style(Style::default().bg(*color)), area);
+            return;
+        }
+        let buffer = frame.buffer_mut();
+        match background.direction() {
+            GradientDirection::Vertical => {
+                for y in area.top()..area.bottom() {
+                    let t = f64::from(y - area.top()) / f64::from(area.height.max(2) - 1);
+                    let style = Style::default().bg(background.color_at(t));
+                    for x in area.left()..area.right() {
+                        buffer[(x, y)].set_style(style);
+                    }
+                }
+            }
+            GradientDirection::Horizontal => {
+                for x in area.left()..area.right() {
+                    let t = f64::from(x - area.left()) / f64::from(area.width.max(2) - 1);
+                    let style = Style::default().bg(background.color_at(t));
+                    for y in area.top()..area.bottom() {
+                        buffer[(x, y)].set_style(style);
+                    }
+                }
+            }
+            GradientDirection::Radial => {
+                // Normalized elliptical distance from the center: 0 at
+                // the middle, 1 at the corners, so the last stop lands
+                // exactly at the screen's edge regardless of aspect.
+                let (cx, cy) = (
+                    f64::from(area.left()) + f64::from(area.width) / 2.0,
+                    f64::from(area.top()) + f64::from(area.height) / 2.0,
+                );
+                let (rx, ry) = (
+                    f64::from(area.width.max(2)) / 2.0,
+                    f64::from(area.height.max(2)) / 2.0,
+                );
+                for y in area.top()..area.bottom() {
+                    for x in area.left()..area.right() {
+                        let dx = (f64::from(x) + 0.5 - cx) / rx;
+                        let dy = (f64::from(y) + 0.5 - cy) / ry;
+                        let t = (dx * dx + dy * dy).sqrt() / std::f64::consts::SQRT_2;
+                        buffer[(x, y)].set_style(Style::default().bg(background.color_at(t)));
+                    }
+                }
+            }
+        }
     }
 
     fn draw_slide(&mut self, frame: &mut Frame, content: Rect, elapsed: Duration) {
@@ -791,7 +843,7 @@ impl App {
             let row = format!("{marker} {:>3}  {label}", i + 1);
             let style = if i == self.selected {
                 Style::default()
-                    .fg(self.theme.background)
+                    .fg(self.theme.background.base())
                     .bg(self.theme.accent)
                     .add_modifier(Modifier::BOLD)
             } else {
@@ -1150,7 +1202,7 @@ mod tests {
             .unwrap();
 
         let accent = app.theme.accent;
-        let background = app.theme.background;
+        let background = app.theme.background.base();
         let buffer = terminal.backend().buffer();
 
         // Find the highlighted row via an 'x' cell.
@@ -1438,6 +1490,99 @@ mod tests {
         }
         cols.sort_unstable();
         cols
+    }
+
+    fn cell_bg(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> ratatui::style::Color {
+        terminal.backend().buffer()[(x, y)].bg
+    }
+
+    /// Like [`test_app`], but resolving the theme from the deck's own
+    /// frontmatter (needed by anything testing `colors:` overrides).
+    fn test_app_themed(src: &str) -> App {
+        let presentation = Presentation::parse(src).unwrap();
+        let theme = Theme::from_metadata(&presentation.metadata).unwrap();
+        App::new(
+            PathBuf::from("/nonexistent.keynot"),
+            LoadedPresentation {
+                presentation,
+                theme,
+            },
+            Highlighter::new(),
+            None,
+            HashMap::new(),
+            PlayOptions::default(),
+        )
+    }
+
+    #[test]
+    fn vertical_gradient_paints_rows_top_to_bottom() {
+        let mut app = test_app_themed(
+            "---\ncolors:\n  background:\n    gradient: ['#000000', '#ffffff']\n---\n# A\n",
+        );
+        let terminal = draw(&mut app, Duration::ZERO);
+        let area = *terminal.backend().buffer().area();
+        assert_eq!(
+            cell_bg(&terminal, 0, 0),
+            ratatui::style::Color::Rgb(0, 0, 0)
+        );
+        assert_eq!(
+            cell_bg(&terminal, 0, area.height - 1),
+            ratatui::style::Color::Rgb(255, 255, 255)
+        );
+        // A middle row sits between the stops, and rows are uniform.
+        let mid = cell_bg(&terminal, 0, area.height / 2);
+        assert!(matches!(mid, ratatui::style::Color::Rgb(v, _, _) if v > 60 && v < 200));
+        assert_eq!(mid, cell_bg(&terminal, area.width - 1, area.height / 2));
+    }
+
+    #[test]
+    fn horizontal_gradient_paints_columns_left_to_right() {
+        let deck = "---\ncolors:\n  background:\n    gradient: ['#000000', '#ffffff']\n    direction: horizontal\n---\n# A\n";
+        let mut app = test_app_themed(deck);
+        let terminal = draw(&mut app, Duration::ZERO);
+        let area = *terminal.backend().buffer().area();
+        assert_eq!(
+            cell_bg(&terminal, 0, 0),
+            ratatui::style::Color::Rgb(0, 0, 0)
+        );
+        assert_eq!(
+            cell_bg(&terminal, area.width - 1, 0),
+            ratatui::style::Color::Rgb(255, 255, 255)
+        );
+    }
+
+    #[test]
+    fn radial_gradient_is_darkest_at_the_center() {
+        let deck = "---\ncolors:\n  background:\n    gradient: ['#000000', '#ffffff']\n    direction: radial\n---\n# A\n";
+        let mut app = test_app_themed(deck);
+        let terminal = draw(&mut app, Duration::ZERO);
+        let area = *terminal.backend().buffer().area();
+        let center = cell_bg(&terminal, area.width / 2, area.height / 2);
+        let corner = cell_bg(&terminal, 0, 0);
+        let (ratatui::style::Color::Rgb(c, _, _), ratatui::style::Color::Rgb(k, _, _)) =
+            (center, corner)
+        else {
+            panic!("gradient cells must be RGB: {center:?} {corner:?}");
+        };
+        assert!(c < 40, "center is near the first stop: {c}");
+        assert!(k > 215, "corners are near the last stop: {k}");
+    }
+
+    #[test]
+    fn gradient_shows_through_slide_text_rows() {
+        // Text cells keep the gradient bg (spans set no background).
+        let mut app = test_app_themed(
+            "---\ncolors:\n  background:\n    gradient: ['#000000', '#ffffff']\n---\nhello\n",
+        );
+        let terminal = draw(&mut app, Duration::ZERO);
+        let screen = buffer_text(&terminal);
+        let row = screen.lines().position(|l| l.contains("hello")).unwrap() as u16;
+        let x = screen.lines().nth(row as usize).unwrap().find('h').unwrap() as u16;
+        let bg = cell_bg(&terminal, x, row);
+        assert!(
+            matches!(bg, ratatui::style::Color::Rgb(..)),
+            "text cell keeps the gradient bg: {bg:?}"
+        );
     }
 
     #[test]

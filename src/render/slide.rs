@@ -4,8 +4,9 @@ use super::highlight::Highlighter;
 use super::wrap::{spans_width, split_spans_at, wrap_spans};
 use crate::markdown::{Block, InlineSpan, ListBlock, Slide};
 use crate::theme::Theme;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use unicode_width::UnicodeWidthStr;
 
 /// Returns the (columns, rows) an image should occupy, or `None` to
 /// render a text placeholder instead.
@@ -352,6 +353,10 @@ fn render_list(list: &ListBlock, ctx: &RenderContext, width: usize, out: &mut Ve
     }
 }
 
+/// Code blocks render, by default, as a little terminal window: a
+/// rounded border with traffic-light dots in the title bar and the
+/// language name in the bottom edge, on a panel darker than any
+/// background gradient. `code_style: plain` keeps just the panel.
 fn render_code(
     language: Option<&str>,
     code: &str,
@@ -361,21 +366,89 @@ fn render_code(
 ) {
     let theme = ctx.theme;
     let bg = Style::default().bg(theme.code_background);
+    let border = Style::default()
+        .fg(theme.code_border)
+        .bg(theme.code_background);
     let code_lines = ctx.highlighter.highlight(code, language, &theme.code_theme);
 
-    // Pad the block to a uniform width: the longest line plus one column of
-    // padding either side, capped to the available width.
+    if theme.code_style == crate::markdown::CodeStyle::Plain {
+        let content_width = code_lines.iter().map(|l| l.width()).max().unwrap_or(0);
+        let box_width = (content_width + 2).min(width).max(4);
+        for line in code_lines {
+            let line = clip_line(line, box_width - 2);
+            let pad = box_width.saturating_sub(line.width() + 1);
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(line.spans);
+            spans.push(Span::raw(" ".repeat(pad)));
+            out.push(Line::from(spans).style(bg));
+        }
+        return;
+    }
+
+    // Pad the block to a uniform width: the longest line plus the
+    // border and one column of padding either side, capped to the
+    // available width.
     let content_width = code_lines.iter().map(|l| l.width()).max().unwrap_or(0);
-    let box_width = (content_width + 2).min(width).max(4);
+    let box_width = (content_width + 4).min(width).max(12);
+    let inner = box_width - 2;
+
+    // Title bar: the classic traffic lights.
+    let mut top = vec![
+        Span::styled("╭", border),
+        Span::styled(" ", border),
+        Span::styled(
+            "\u{25cf} ",
+            Style::default()
+                .fg(Color::Rgb(0xff, 0x5f, 0x57))
+                .bg(theme.code_background),
+        ),
+        Span::styled(
+            "\u{25cf} ",
+            Style::default()
+                .fg(Color::Rgb(0xfe, 0xbc, 0x2e))
+                .bg(theme.code_background),
+        ),
+        Span::styled(
+            "\u{25cf}",
+            Style::default()
+                .fg(Color::Rgb(0x28, 0xc8, 0x40))
+                .bg(theme.code_background),
+        ),
+        Span::styled(" ", border),
+    ];
+    let used: usize = top.iter().map(|s| s.content.width()).sum();
+    top.push(Span::styled(
+        "\u{2500}".repeat(box_width.saturating_sub(used + 1)),
+        border,
+    ));
+    top.push(Span::styled("╮", border));
+    out.push(Line::from(top));
 
     for line in code_lines {
-        let line = clip_line(line, box_width - 2);
-        let pad = box_width.saturating_sub(line.width() + 1);
-        let mut spans = vec![Span::raw(" ")];
+        let line = clip_line(line, inner - 2);
+        let pad = inner.saturating_sub(line.width() + 1);
+        let mut spans = vec![Span::styled("\u{2502}", border), Span::raw(" ")];
         spans.extend(line.spans);
-        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::raw(" ".repeat(pad.max(1))));
+        spans.push(Span::styled("\u{2502}", border));
         out.push(Line::from(spans).style(bg));
     }
+
+    // Bottom edge, with the language as a label when known.
+    let mut bottom = vec![Span::styled("╰", border)];
+    match language {
+        Some(lang) if lang.width() + 6 <= inner => {
+            bottom.push(Span::styled(
+                "\u{2500}".repeat(inner - lang.width() - 4),
+                border,
+            ));
+            bottom.push(Span::styled(format!(" {lang} "), border));
+            bottom.push(Span::styled("\u{2500}".repeat(2), border));
+        }
+        _ => bottom.push(Span::styled("\u{2500}".repeat(inner), border)),
+    }
+    bottom.push(Span::styled("╯", border));
+    out.push(Line::from(bottom));
 }
 
 fn render_quote(inner: &[Block], ctx: &RenderContext, width: usize, out: &mut Vec<Line<'static>>) {
@@ -589,17 +662,77 @@ mod tests {
     fn code_block_has_uniform_background_width() {
         let text = render("```rust\nlet x = 1;\nlet longer = 22;\n```", 40);
         let lines = &text.lines;
-        assert_eq!(lines.len(), 2);
-        // Both lines padded to the same width.
+        // Title bar, two code lines, bottom edge.
+        assert_eq!(lines.len(), 4);
+        // Every row of the window is the same width.
         assert_eq!(lines[0].width(), lines[1].width());
-        assert!(lines[0].to_string().contains("let x = 1;"));
+        assert_eq!(lines[1].width(), lines[2].width());
+        assert_eq!(lines[2].width(), lines[3].width());
+        assert!(lines[1].to_string().contains("let x = 1;"));
+    }
+
+    #[test]
+    fn code_block_is_a_terminal_window() {
+        let text = render("```rust\nlet x = 1;\n```", 40);
+        let top = text.lines[0].to_string();
+        let bottom = text.lines[2].to_string();
+        assert!(
+            top.starts_with('\u{256d}') && top.ends_with('\u{256e}'),
+            "{top:?}"
+        );
+        assert_eq!(
+            top.matches('\u{25cf}').count(),
+            3,
+            "traffic lights: {top:?}"
+        );
+        assert!(bottom.contains(" rust "), "language label: {bottom:?}");
+        assert!(
+            bottom.starts_with('\u{2570}') && bottom.ends_with('\u{256f}'),
+            "{bottom:?}"
+        );
+        // Side borders on the code row.
+        let mid = text.lines[1].to_string();
+        assert!(
+            mid.starts_with('\u{2502}') && mid.ends_with('\u{2502}'),
+            "{mid:?}"
+        );
+    }
+
+    #[test]
+    fn plain_code_style_has_no_frame() {
+        let theme = Theme {
+            code_style: crate::markdown::CodeStyle::Plain,
+            ..Theme::dark()
+        };
+        let slide = Slide::parse("```rust\nlet x = 1;\n```");
+        let ctx = RenderContext {
+            theme: &theme,
+            highlighter: highlighter(),
+            image_sizer: None,
+        };
+        let rendered = render_slide(&slide, &ctx, 40);
+        assert_eq!(rendered.text.lines.len(), 1, "just the code line");
+        let row = rendered.text.lines[0].to_string();
+        assert!(row.contains("let x = 1;"));
+        assert!(
+            !row.contains('\u{256d}') && !row.contains('\u{25cf}'),
+            "{row:?}"
+        );
+    }
+
+    #[test]
+    fn code_block_without_language_has_no_label() {
+        let text = render("```\nplain\n```", 40);
+        let bottom = text.lines[2].to_string();
+        assert!(!bottom.contains(char::is_alphabetic), "{bottom:?}");
     }
 
     #[test]
     fn long_code_lines_are_clipped_not_wrapped() {
         let text = render("```\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n```", 12);
-        assert_eq!(text.lines.len(), 1);
-        assert!(text.lines[0].width() <= 12);
+        // Title bar, one clipped code line, bottom edge.
+        assert_eq!(text.lines.len(), 3);
+        assert!(text.lines.iter().all(|l| l.width() <= 12));
     }
 
     #[test]
@@ -699,7 +832,8 @@ mod tests {
     #[test]
     fn code_block_background_survives_the_join() {
         let rendered = render_cols(&["left", "```\ncode\n```"], 23);
-        let row = &rendered.text.lines[0];
+        // Row 0 is the window's title bar; row 1 holds the code.
+        let row = &rendered.text.lines[1];
         assert!(row.to_string().contains("code"));
         let code_bg = Theme::dark().code_background;
         assert!(

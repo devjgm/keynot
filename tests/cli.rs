@@ -191,7 +191,7 @@ fn check_fails_on_misspelled_frontmatter_key() {
         .assert()
         .failure()
         .stderr_eq(str![[r#"
-Error: unknown frontmatter key `transtion` (line 3) (valid keys: title, author, date, theme, colors, code_theme, transition, highlight, footer; colors: background, text, heading, accent, link, blockquote, code_background)
+Error: unknown frontmatter key `transtion` (line 3) (valid keys: title, author, date, theme, colors, code_theme, code_style, transition, highlight, footer; colors: background, text, heading, accent, link, blockquote, code_background, code_border)
 ...
 "#]]);
 }
