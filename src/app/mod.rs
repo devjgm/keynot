@@ -555,22 +555,6 @@ impl App {
         let slide = &self.presentation.slides[index];
         let rendered = render_slide(slide, &ctx, content.width as usize);
 
-        // The renderer reserved blank rows for each image; if a renderer
-        // change breaks that contract, fail loudly in debug builds
-        // instead of drawing pictures over text.
-        #[cfg(debug_assertions)]
-        for p in &rendered.images {
-            for line in rendered
-                .text
-                .lines
-                .iter()
-                .skip(p.line)
-                .take(p.height as usize)
-            {
-                assert_eq!(line.width(), 0, "image rows must be blank");
-            }
-        }
-
         let non_blank: Vec<usize> = rendered
             .text
             .lines
@@ -822,7 +806,7 @@ fn default_shell() -> String {
 
 /// First bit of plain text on a slide, for outline labels.
 fn first_text(slide: &Slide) -> Option<String> {
-    slide.blocks.iter().find_map(|b| match b {
+    slide.columns.iter().flatten().find_map(|b| match b {
         MdBlock::Paragraph(spans) if !spans.is_empty() => {
             Some(spans.iter().map(|s| s.text.as_str()).collect::<String>())
         }
@@ -1295,6 +1279,44 @@ mod tests {
             );
             assert_eq!(app.current, expected, "start_slide: {start}");
         }
+    }
+
+    #[test]
+    fn two_column_slides_draw_both_columns() {
+        let mut app = test_app("LEFTTEXT\n|||\nRIGHTTEXT\n");
+        let terminal = draw(&mut app, Duration::ZERO);
+        let screen = buffer_text(&terminal);
+        let row = screen
+            .lines()
+            .find(|l| l.contains("LEFTTEXT"))
+            .expect("left column on screen");
+        assert!(row.contains("RIGHTTEXT"), "columns share a row: {row:?}");
+    }
+
+    #[test]
+    fn outline_labels_find_headingless_column_text() {
+        let mut app = test_app("first col\n|||\n## Col Title\n---\n# B\n");
+        app.mode = Mode::Outline;
+        let terminal = draw(&mut app, Duration::ZERO);
+        // The heading in the second column labels the slide.
+        assert!(buffer_text(&terminal).contains("Col Title"));
+    }
+
+    #[test]
+    fn highlight_bar_spans_a_column_row() {
+        let mut app = test_app("aaa\n|||\nbbb\n");
+        app.highlight = Some(0);
+        let terminal = draw(&mut app, Duration::ZERO);
+        let buffer = terminal.backend().buffer();
+        let accent = app.theme.accent;
+        // Both columns' text cells sit on the accent bar.
+        let mut on_bar = 0;
+        for cell in buffer.content() {
+            if (cell.symbol() == "a" || cell.symbol() == "b") && cell.bg == accent {
+                on_bar += 1;
+            }
+        }
+        assert_eq!(on_bar, 6, "all six letters ride the bar");
     }
 
     #[test]

@@ -72,12 +72,17 @@ That rule above is three stars, since `---` separates slides.
 ## Images
 
 An image alone on its line renders as a real picture (kitty, iTerm2,
-sixel, or half-block cells, depending on your terminal). Local paths and
-URLs both work; URLs are fetched when the presentation starts:
-
-![Ferris, the Rust mascot](https://rustacean.net/assets/rustacean-flat-happy.png)
+sixel, or half-block cells, depending on your terminal). Local paths
+and URLs both work; URLs are fetched when the presentation starts.
 
 Inline images like ![this one](ferris.png) show a placeholder.
+
+This slide is split into two columns with `|||` -- Ferris gets the
+right one to himself.
+
+|||
+
+![Ferris, the Rust mascot](https://rustacean.net/assets/rustacean-flat-happy.png)
 
 ---
 

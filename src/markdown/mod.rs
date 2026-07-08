@@ -5,8 +5,9 @@
 //! - Optional YAML frontmatter delimited by `---` lines at the very top,
 //!   holding presentation-wide metadata (title, author, theme, ...).
 //! - Slides written in plain markdown, separated by `---` on a line of its
-//!   own (code fences are respected, so a `---` inside a fenced block does
-//!   not split slides).
+//!   own, with `|||` splitting a slide into side-by-side columns (code
+//!   fences are respected, so neither separator applies inside a fenced
+//!   block).
 //! - HTML comments (`<!-- like this -->`) which never render; they are
 //!   collected as per-slide speaker notes.
 //!
@@ -51,7 +52,7 @@ impl Presentation {
         let slides: Vec<Slide> = split
             .slides
             .iter()
-            .map(|raw| Slide::parse(&raw.content))
+            .map(|raw| Slide::parse_columns(&raw.columns))
             .collect();
         if slides.is_empty() {
             return Err(ParseError::NoSlides);

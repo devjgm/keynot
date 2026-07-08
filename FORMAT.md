@@ -39,7 +39,9 @@ non-empty slide):
 
 1. **Frontmatter**: a YAML block delimited by `---` lines, which must start
    on the very first line of the file.
-2. **Slides**: markdown, separated by lines containing only `---`.
+2. **Slides**: markdown, separated by lines containing only `---`, each
+   optionally split into side-by-side columns by lines containing only
+   `|||` (see [Columns](#columns)).
 
 ### Frontmatter
 
@@ -141,6 +143,50 @@ Two things to know about `---`:
 
 Slides containing only whitespace are dropped, so a trailing `---` at the
 end of the file does not create an empty slide.
+
+### Columns
+
+A line containing only `|||` splits the current slide into side-by-side
+columns -- a keynot extension that most markdown slide formats can only
+approximate with layout hacks:
+
+````markdown
+## Comparison
+
+The left column.
+
+- Anything can go in a column: lists,
+  quotes, code, even images.
+
+|||
+
+The right column.
+
+```rust
+fn main() {
+    println!("code on the right");
+}
+```
+````
+
+How columns behave:
+
+- `|||` follows exactly the same rules as `---`: it must be alone on its
+  line (surrounding whitespace allowed), and it never splits inside a
+  fenced code block.
+- Every `|||` adds one more column; two separators make three columns.
+- Columns share the slide width equally, separated by a small gutter,
+  and are laid out top-aligned; the tallest column determines the
+  slide's height for vertical centering.
+- Each column is its own little slide: text wraps to the column width,
+  code blocks clip to it, and images center within their column.
+- A column containing only whitespace is dropped (and a slide whose
+  columns are all blank is dropped entirely).
+- There is no shared full-width region: a heading belongs to whichever
+  column it is written in. Put it in the first column for a
+  title-on-the-left look.
+- The speaker line highlight (up/down) operates on whole rows, spanning
+  all columns.
 
 ## Comments and speaker notes
 

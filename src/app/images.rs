@@ -29,7 +29,7 @@ pub type Decoded = Result<DynamicImage, String>;
 pub fn decode_all(slides: &[Slide], base: &Path) -> HashMap<String, Decoded> {
     let mut decoded = HashMap::new();
     for slide in slides {
-        for block in &slide.blocks {
+        for block in slide.columns.iter().flatten() {
             if let Block::Image { source, .. } = block
                 && !decoded.contains_key(source)
             {
@@ -90,10 +90,17 @@ impl Images {
 
     /// Ensure every image on the slide is loaded (or marked failed).
     pub fn preload(&mut self, slide: &Slide) {
-        for block in &slide.blocks {
-            if let Block::Image { source, .. } = block {
-                self.load(source);
-            }
+        let sources: Vec<String> = slide
+            .columns
+            .iter()
+            .flatten()
+            .filter_map(|block| match block {
+                Block::Image { source, .. } => Some(source.clone()),
+                _ => None,
+            })
+            .collect();
+        for source in sources {
+            self.load(&source);
         }
     }
 

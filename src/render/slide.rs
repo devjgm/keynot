@@ -21,12 +21,14 @@ pub struct RenderContext<'a> {
 }
 
 /// Where an image goes within rendered slide text: `height` blank lines
-/// are reserved starting at line index `line`; the player draws the
-/// picture over them.
+/// are reserved starting at line index `line`, and the player draws the
+/// picture over them at horizontal offset `x` (relative to the slide
+/// text area; already centered within the image's column).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImagePlacement {
     pub line: usize,
     pub source: String,
+    pub x: u16,
     pub width: u16,
     pub height: u16,
 }
@@ -38,20 +40,104 @@ pub struct RenderedSlide {
     pub images: Vec<ImagePlacement>,
 }
 
-/// Render a slide as text wrapped to `width` columns. The caller places
-/// (and vertically centers) the returned text and draws the images.
+/// The gap between columns of a multi-column slide, in cells.
+const COLUMN_GUTTER: usize = 3;
+
+/// Render a slide as text wrapped to `width` cells. Multi-column slides
+/// ([`Slide::columns`]) render each column independently and join them
+/// side by side, top-aligned, with equal widths. The caller places (and
+/// vertically centers) the returned text and draws the images.
 pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> RenderedSlide {
     let width = width.max(10);
+    let n = slide.columns.len().max(1);
+    if n == 1 {
+        let empty = Vec::new();
+        let blocks = slide.columns.first().unwrap_or(&empty);
+        let (lines, images) = render_column(blocks, ctx, width);
+        return RenderedSlide {
+            text: Text::from(lines),
+            images,
+        };
+    }
+
+    let usable = width.saturating_sub(COLUMN_GUTTER * (n - 1));
+    let base_width = (usable / n).max(1);
+    let last_width = usable.saturating_sub(base_width * (n - 1)).max(1);
+
+    let mut rendered: Vec<(Vec<Line>, usize)> = Vec::with_capacity(n);
+    let mut images = Vec::new();
+    let mut x_offset = 0usize;
+    for (i, blocks) in slide.columns.iter().enumerate() {
+        let col_width = if i == n - 1 { last_width } else { base_width };
+        let (lines, mut placements) = render_column(blocks, ctx, col_width);
+        for placement in &mut placements {
+            placement.x += x_offset as u16;
+        }
+        images.extend(placements);
+        rendered.push((lines, col_width));
+        x_offset += col_width + COLUMN_GUTTER;
+    }
+
+    // Join row-wise: pad every column's row to its exact width so the
+    // next column starts at a fixed x. Per-line styles (e.g. code block
+    // backgrounds) are pushed down into the spans, since the joined line
+    // can only carry one line-level style.
+    let rows = rendered
+        .iter()
+        .map(|(lines, _)| lines.len())
+        .max()
+        .unwrap_or(0);
+    let mut joined = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (i, (lines, col_width)) in rendered.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" ".repeat(COLUMN_GUTTER)));
+            }
+            let mut row_width = 0;
+            if let Some(line) = lines.get(row) {
+                row_width = line.width();
+                let base = line.style;
+                spans.extend(
+                    line.spans
+                        .iter()
+                        .map(|s| Span::styled(s.content.clone(), base.patch(s.style))),
+                );
+            }
+            if i < n - 1 {
+                let pad = col_width.saturating_sub(row_width);
+                if pad > 0 {
+                    spans.push(Span::raw(" ".repeat(pad)));
+                }
+            }
+        }
+        // Drop trailing padding (rows where the right columns are
+        // empty). Styled spans stay: a code panel's background padding
+        // is blank text but visible.
+        while spans
+            .last()
+            .is_some_and(|s| s.content.trim().is_empty() && s.style == Style::default())
+        {
+            spans.pop();
+        }
+        joined.push(Line::from(spans));
+    }
+    RenderedSlide {
+        text: Text::from(joined),
+        images,
+    }
+}
+
+/// Render one column of blocks at `width`, returning its lines (trailing
+/// blanks trimmed, image rows preserved) and image placements.
+fn render_column(
+    blocks: &[Block],
+    ctx: &RenderContext,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<ImagePlacement>) {
     let mut lines = Vec::new();
     let mut images = Vec::new();
-    render_blocks_spaced(
-        &slide.blocks,
-        ctx,
-        width,
-        &mut lines,
-        true,
-        Some(&mut images),
-    );
+    render_blocks_spaced(blocks, ctx, width, &mut lines, true, Some(&mut images));
     // Trim trailing blanks, but never into rows reserved for images.
     let reserved = images
         .iter()
@@ -61,10 +147,16 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
     while lines.len() > reserved && lines.last().is_some_and(|l: &Line| l.width() == 0) {
         lines.pop();
     }
-    RenderedSlide {
-        text: Text::from(lines),
-        images,
+    // The renderer reserved blank rows for each image; if a renderer
+    // change breaks that contract, fail loudly in debug builds instead
+    // of drawing pictures over text.
+    #[cfg(debug_assertions)]
+    for p in &images {
+        for line in lines.iter().skip(p.line).take(p.height as usize) {
+            assert_eq!(line.width(), 0, "image rows must be blank");
+        }
     }
+    (lines, images)
 }
 
 /// Drop empty lines from the end.
@@ -108,7 +200,7 @@ fn render_blocks_spaced(
             }
             Block::BlockQuote(inner) => render_quote(inner, ctx, width, out),
             Block::Image { source, alt } => {
-                render_image(source, alt, ctx, out, images.as_deref_mut());
+                render_image(source, alt, ctx, width, out, images.as_deref_mut());
             }
             Block::Rule => {
                 out.push(Line::styled(
@@ -123,12 +215,14 @@ fn render_blocks_spaced(
     }
 }
 
-/// Reserve blank lines for an image (recording its placement), or render
-/// a `[image: alt]` placeholder when no size is available.
+/// Reserve blank lines for an image (recording its placement, centered
+/// within `width`), or render a `[image: alt]` placeholder when no size
+/// is available.
 fn render_image(
     source: &str,
     alt: &str,
     ctx: &RenderContext,
+    width: usize,
     out: &mut Vec<Line<'static>>,
     images: Option<&mut Vec<ImagePlacement>>,
 ) {
@@ -137,9 +231,11 @@ fn render_image(
         && let Some((cols, rows)) = sizer(source)
         && rows > 0
     {
+        let cols = cols.min(width as u16).max(1);
         images.push(ImagePlacement {
             line: out.len(),
             source: source.to_string(),
+            x: (width as u16 - cols) / 2,
             width: cols,
             height: rows,
         });
@@ -510,7 +606,7 @@ mod tests {
     fn inline_code_gets_accent_and_background() {
         let theme = Theme::dark();
         let slide = Slide::parse("`code`");
-        let crate::markdown::Block::Paragraph(spans) = &slide.blocks[0] else {
+        let crate::markdown::Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         let converted = convert_inline(spans, &theme);
@@ -522,7 +618,7 @@ mod tests {
     fn links_are_underlined_in_link_color() {
         let theme = Theme::dark();
         let slide = Slide::parse("[text](https://x.dev)");
-        let crate::markdown::Block::Paragraph(spans) = &slide.blocks[0] else {
+        let crate::markdown::Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         let converted = convert_inline(spans, &theme);
@@ -533,6 +629,102 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::UNDERLINED)
         );
+    }
+
+    /// Render a multi-column slide built from raw column sources.
+    fn render_cols(cols: &[&str], width: usize) -> RenderedSlide {
+        let theme = Theme::dark();
+        let slide = Slide::parse_columns(&cols.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let ctx = RenderContext {
+            theme: &theme,
+            highlighter: highlighter(),
+            image_sizer: None,
+        };
+        render_slide(&slide, &ctx, width)
+    }
+
+    #[test]
+    fn two_columns_render_side_by_side() {
+        // width 23: usable 20, two columns of 10, gutter 3.
+        let rendered = render_cols(&["aa", "bb"], 23);
+        assert_eq!(
+            rendered.text.lines[0].to_string(),
+            format!("aa{}bb", " ".repeat(11))
+        );
+    }
+
+    #[test]
+    fn column_text_starts_at_fixed_offsets() {
+        // Wrapping happens per column: each column is 10 wide.
+        let rendered = render_cols(&["one two three", "x"], 23);
+        let lines: Vec<String> = rendered.text.lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[0], format!("one two{}x", " ".repeat(6)));
+        assert_eq!(lines[1], "three");
+    }
+
+    #[test]
+    fn tallest_column_defines_the_row_count() {
+        let rendered = render_cols(&["a", "1\n\n2\n\n3"], 23);
+        assert_eq!(rendered.text.lines.len(), 5);
+        // Short column's missing rows are just absent (left blank).
+        assert_eq!(rendered.text.lines[4].to_string().trim(), "3");
+    }
+
+    #[test]
+    fn three_columns_share_the_width() {
+        // width 36: usable 30, three columns of 10.
+        let rendered = render_cols(&["a", "b", "c"], 36);
+        let row = rendered.text.lines[0].to_string();
+        assert_eq!(row, format!("a{}b{}c", " ".repeat(12), " ".repeat(12)));
+    }
+
+    #[test]
+    fn code_block_background_survives_the_join() {
+        let rendered = render_cols(&["left", "```\ncode\n```"], 23);
+        let row = &rendered.text.lines[0];
+        assert!(row.to_string().contains("code"));
+        let code_bg = Theme::dark().code_background;
+        assert!(
+            row.spans.iter().any(|s| s.style.bg == Some(code_bg)),
+            "code panel background must survive joining: {row:?}"
+        );
+        // The panel's right padding is styled blank space; the join's
+        // trailing trim must not eat it.
+        let last = row.spans.last().unwrap();
+        assert_eq!(last.style.bg, Some(code_bg), "styled padding kept: {row:?}");
+    }
+
+    #[test]
+    fn image_in_second_column_is_offset() {
+        let theme = Theme::dark();
+        let slide = Slide::parse_columns(&["left".to_string(), "![c](c.png)".to_string()]);
+        let sizer = |_: &str| Some((6u16, 3u16));
+        let ctx = RenderContext {
+            theme: &theme,
+            highlighter: highlighter(),
+            image_sizer: Some(&sizer),
+        };
+        let rendered = render_slide(&slide, &ctx, 23);
+        // Column 2 starts at 13; a 6-wide image centered in 10 sits at +2.
+        assert_eq!(
+            rendered.images,
+            vec![ImagePlacement {
+                line: 0,
+                source: "c.png".to_string(),
+                x: 15,
+                width: 6,
+                height: 3,
+            }]
+        );
+        // Its reserved rows are blank within the column (the join keeps
+        // the left column's text on those rows).
+        assert!(rendered.text.lines[0].to_string().starts_with("left"));
+    }
+
+    #[test]
+    fn single_column_image_is_centered() {
+        let rendered = render_with_images("![c](c.png)", 40, (10, 4));
+        assert_eq!(rendered.images[0].x, 15, "(40 - 10) / 2");
     }
 
     #[test]
@@ -549,6 +741,7 @@ mod tests {
             vec![ImagePlacement {
                 line: 2,
                 source: "c.png".to_string(),
+                x: 10,
                 width: 20,
                 height: 5,
             }]

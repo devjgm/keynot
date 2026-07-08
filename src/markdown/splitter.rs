@@ -5,17 +5,19 @@
 //! - If the very first line is `---`, everything up to the next `---` (or
 //!   `...`, as in YAML) is frontmatter.
 //! - After that, any line that is exactly `---` (ignoring surrounding
-//!   whitespace) separates slides, unless it appears inside a fenced code
-//!   block (``` or ~~~ fences, per CommonMark).
-//! - Slides that contain only whitespace are dropped.
+//!   whitespace) separates slides, and `|||` separates columns within a
+//!   slide -- unless either appears inside a fenced code block (``` or
+//!   ~~~ fences, per CommonMark).
+//! - Slides and columns that contain only whitespace are dropped.
 
 use super::ParseError;
 
-/// One slide's raw markdown source.
+/// One slide's raw markdown source, one string per `|||` column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawSlide {
-    /// The markdown source of the slide, without the `---` separators.
-    pub content: String,
+    /// The slide's columns, without the `---` or `|||` separators. Always
+    /// at least one entry.
+    pub columns: Vec<String>,
     /// 1-based line number in the original file where this slide starts.
     pub line: usize,
 }
@@ -45,6 +47,7 @@ pub fn split(source: &str) -> Result<SplitResult, ParseError> {
     }
 
     let mut fence: Option<Fence> = None;
+    let mut columns: Vec<String> = Vec::new();
     let mut current = Vec::new();
     let mut start_line = idx + 1;
 
@@ -56,25 +59,39 @@ pub fn split(source: &str) -> Result<SplitResult, ParseError> {
                 if let Some(open) = Fence::opened_by(line) {
                     fence = Some(open);
                 } else if line.trim() == "---" {
-                    push_slide(&mut result.slides, &mut current, start_line);
+                    push_column(&mut columns, &mut current);
+                    push_slide(&mut result.slides, &mut columns, start_line);
                     start_line = idx + offset + 2;
+                    continue;
+                } else if line.trim() == "|||" {
+                    push_column(&mut columns, &mut current);
                     continue;
                 }
             }
         }
         current.push(*line);
     }
-    push_slide(&mut result.slides, &mut current, start_line);
+    push_column(&mut columns, &mut current);
+    push_slide(&mut result.slides, &mut columns, start_line);
 
     Ok(result)
 }
 
-fn push_slide(slides: &mut Vec<RawSlide>, current: &mut Vec<&str>, start_line: usize) {
+/// Finish the current column, dropping it when blank.
+fn push_column(columns: &mut Vec<String>, current: &mut Vec<&str>) {
     let content = current.join("\n");
     current.clear();
     if !content.trim().is_empty() {
+        columns.push(content);
+    }
+}
+
+/// Finish the current slide, dropping it when it has no columns.
+fn push_slide(slides: &mut Vec<RawSlide>, columns: &mut Vec<String>, start_line: usize) {
+    let columns = std::mem::take(columns);
+    if !columns.is_empty() {
         slides.push(RawSlide {
-            content,
+            columns,
             line: start_line,
         });
     }
@@ -123,12 +140,23 @@ impl Fence {
 mod tests {
     use super::*;
 
+    /// Single-column content of each slide (most tests use no `|||`).
     fn slide_contents(src: &str) -> Vec<String> {
         split(src)
             .unwrap()
             .slides
             .into_iter()
-            .map(|s| s.content)
+            .map(|s| s.columns.join("\n<col>\n"))
+            .collect()
+    }
+
+    /// The columns of each slide.
+    fn slide_columns(src: &str) -> Vec<Vec<String>> {
+        split(src)
+            .unwrap()
+            .slides
+            .into_iter()
+            .map(|s| s.columns)
             .collect()
     }
 
@@ -137,7 +165,7 @@ mod tests {
         let r = split("# Hello\n\nworld\n").unwrap();
         assert_eq!(r.frontmatter, None);
         assert_eq!(r.slides.len(), 1);
-        assert_eq!(r.slides[0].content, "# Hello\n\nworld");
+        assert_eq!(r.slides[0].columns, vec!["# Hello\n\nworld"]);
         assert_eq!(r.slides[0].line, 1);
     }
 
@@ -170,7 +198,7 @@ mod tests {
         let r = split("---\ntitle: Hi\nauthor: Alice\n---\n# Slide\n").unwrap();
         assert_eq!(r.frontmatter.as_deref(), Some("title: Hi\nauthor: Alice"));
         assert_eq!(r.slides.len(), 1);
-        assert_eq!(r.slides[0].content, "# Slide");
+        assert_eq!(r.slides[0].columns, vec!["# Slide"]);
         assert_eq!(r.slides[0].line, 5);
     }
 
@@ -247,6 +275,62 @@ mod tests {
     fn drops_blank_slides() {
         let slides = slide_contents("# A\n---\n\n   \n---\n# B\n---\n");
         assert_eq!(slides, vec!["# A", "# B"]);
+    }
+
+    #[test]
+    fn pipes_split_columns_within_a_slide() {
+        let cols = slide_columns("left\n|||\nright\n---\n# B\n");
+        assert_eq!(cols, vec![vec!["left", "right"], vec!["# B"]]);
+    }
+
+    #[test]
+    fn column_separator_allows_surrounding_whitespace() {
+        let cols = slide_columns("a\n  |||  \nb\n");
+        assert_eq!(cols, vec![vec!["a", "b"]]);
+    }
+
+    #[test]
+    fn four_pipes_is_not_a_column_separator() {
+        let cols = slide_columns("a\n||||\nb\n");
+        assert_eq!(cols, vec![vec!["a\n||||\nb"]]);
+    }
+
+    #[test]
+    fn pipes_with_trailing_text_are_not_a_separator() {
+        let cols = slide_columns("a\n||| extra\nb\n");
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].len(), 1);
+    }
+
+    #[test]
+    fn pipes_inside_code_fences_do_not_split() {
+        let cols = slide_columns("```\n|||\n```\n");
+        assert_eq!(cols, vec![vec!["```\n|||\n```"]]);
+    }
+
+    #[test]
+    fn blank_columns_are_dropped() {
+        let cols = slide_columns("a\n|||\n   \n|||\nb\n");
+        assert_eq!(cols, vec![vec!["a", "b"]]);
+    }
+
+    #[test]
+    fn all_blank_columns_drop_the_slide() {
+        let cols = slide_columns("# A\n---\n|||\n   \n|||\n---\n# B\n");
+        assert_eq!(cols, vec![vec!["# A"], vec!["# B"]]);
+    }
+
+    #[test]
+    fn columns_do_not_affect_slide_line_numbers() {
+        let r = split("# A\n|||\nright\n---\n# B\n").unwrap();
+        assert_eq!(r.slides[0].line, 1);
+        assert_eq!(r.slides[1].line, 5);
+    }
+
+    #[test]
+    fn three_columns() {
+        let cols = slide_columns("a\n|||\nb\n|||\nc\n");
+        assert_eq!(cols, vec![vec!["a", "b", "c"]]);
     }
 
     #[test]

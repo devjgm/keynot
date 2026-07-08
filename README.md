@@ -21,6 +21,8 @@ but it's not, and it lives in your terminal, like you.
   [ratatui-image](https://github.com/ratatui/ratatui-image): kitty,
   iTerm2, and sixel graphics, with a half-block fallback everywhere
   else; local files or URLs
+- Multi-column slides: split any slide into side-by-side columns with a
+  `|||` line -- no layout hacks
 - Slide transitions via [tachyonfx](https://github.com/ratatui/tachyonfx)
 - Outline overview for jumping around, in-show help, live reload
 

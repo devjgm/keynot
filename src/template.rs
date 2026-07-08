@@ -85,7 +85,7 @@ mod tests {
         let src = skeleton("T");
         let p = Presentation::parse(&src).unwrap();
         let has_rust_block = p.slides.iter().any(|s| {
-            s.blocks.iter().any(|b| {
+            s.columns.iter().flatten().any(|b| {
                 matches!(
                     b,
                     crate::markdown::Block::CodeBlock { language: Some(l), .. } if l == "rust"

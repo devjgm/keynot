@@ -7,11 +7,14 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-/// One parsed slide.
+/// One parsed slide: one or more side-by-side columns of blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Slide {
-    pub blocks: Vec<Block>,
-    /// Speaker notes collected from HTML comments, in document order.
+    /// The slide's columns (from `|||` separators); single-column slides
+    /// have exactly one entry.
+    pub columns: Vec<Vec<Block>>,
+    /// Speaker notes collected from HTML comments across all columns, in
+    /// document order.
     pub notes: Vec<String>,
 }
 
@@ -87,28 +90,49 @@ impl InlineSpan {
 }
 
 impl Slide {
-    /// Parse one slide's markdown source. Markdown parsing cannot fail;
+    /// Parse one single-column slide. Markdown parsing cannot fail;
     /// malformed input just renders as literal text.
     pub fn parse(source: &str) -> Self {
-        let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-        let parser = Parser::new_ext(source, options);
-        let mut builder = SlideBuilder::default();
-        for event in parser {
-            builder.event(event);
-        }
-        builder.finish()
+        Slide::parse_columns(std::slice::from_ref(&source.to_string()))
     }
 
-    /// All inline text of the first heading (or `None`), joined. Used as
-    /// the slide's outline label and as the presentation title fallback.
+    /// Parse a slide from its column sources (one per `|||` section).
+    pub fn parse_columns(columns: &[String]) -> Self {
+        let mut slide = Slide::default();
+        for source in columns {
+            let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+            let parser = Parser::new_ext(source, options);
+            let mut builder = SlideBuilder::default();
+            for event in parser {
+                builder.event(event);
+            }
+            let column = builder.finish();
+            slide.columns.push(column.blocks);
+            slide.notes.extend(column.notes);
+        }
+        if slide.columns.is_empty() {
+            slide.columns.push(Vec::new());
+        }
+        slide
+    }
+
+    /// All inline text of the first heading (or `None`), joined; columns
+    /// are searched in order. Used as the slide's outline label and as
+    /// the presentation title fallback.
     pub fn title_text(&self) -> Option<String> {
-        self.blocks.iter().find_map(|b| match b {
+        self.columns.iter().flatten().find_map(|b| match b {
             Block::Heading { content, .. } if !content.is_empty() => {
                 Some(content.iter().map(|s| s.text.as_str()).collect())
             }
             _ => None,
         })
     }
+}
+
+/// One parsed `|||` column: its blocks and the notes found in it.
+struct ParsedColumn {
+    blocks: Vec<Block>,
+    notes: Vec<String>,
 }
 
 /// Open container blocks while walking parser events.
@@ -371,9 +395,9 @@ impl SlideBuilder {
         }
     }
 
-    fn finish(mut self) -> Slide {
+    fn finish(mut self) -> ParsedColumn {
         self.flush_inline();
-        Slide {
+        ParsedColumn {
             blocks: self.blocks,
             notes: self.notes,
         }
@@ -421,7 +445,7 @@ mod tests {
         for (src, level) in [("# H", 1), ("## H", 2), ("### H", 3), ("###### H", 6)] {
             let slide = Slide::parse(src);
             assert_eq!(
-                slide.blocks,
+                slide.columns[0],
                 vec![Block::Heading {
                     level,
                     content: vec![InlineSpan::plain("H")]
@@ -434,7 +458,7 @@ mod tests {
     #[test]
     fn parses_paragraph_with_inline_styles() {
         let slide = Slide::parse("plain **bold** *italic* ~~gone~~ `code`");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!("expected paragraph");
         };
         assert_eq!(text_of(spans), "plain bold italic gone code");
@@ -451,7 +475,7 @@ mod tests {
     #[test]
     fn nested_emphasis_combines() {
         let slide = Slide::parse("***both***");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert!(spans[0].style.bold && spans[0].style.italic);
@@ -460,7 +484,7 @@ mod tests {
     #[test]
     fn underline_via_html_u_tag() {
         let slide = Slide::parse("a <u>under</u> b");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         let under: Vec<_> = spans.iter().filter(|s| s.style.underline).collect();
@@ -471,7 +495,7 @@ mod tests {
     #[test]
     fn links_carry_url() {
         let slide = Slide::parse("see [the docs](https://example.com) now");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         let link = spans.iter().find(|s| s.link.is_some()).unwrap();
@@ -482,7 +506,7 @@ mod tests {
     #[test]
     fn soft_break_is_a_space() {
         let slide = Slide::parse("one\ntwo");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(text_of(spans), "one two");
@@ -491,7 +515,7 @@ mod tests {
     #[test]
     fn hard_break_is_a_newline() {
         let slide = Slide::parse("one  \ntwo");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(text_of(spans), "one\ntwo");
@@ -500,7 +524,7 @@ mod tests {
     #[test]
     fn br_tag_is_a_newline() {
         let slide = Slide::parse("one<br>two");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(text_of(spans), "one\ntwo");
@@ -509,7 +533,7 @@ mod tests {
     #[test]
     fn parses_unordered_list() {
         let slide = Slide::parse("- one\n- two\n");
-        let Block::List(list) = &slide.blocks[0] else {
+        let Block::List(list) = &slide.columns[0][0] else {
             panic!()
         };
         assert!(!list.ordered);
@@ -523,7 +547,7 @@ mod tests {
     #[test]
     fn parses_ordered_list_with_start() {
         let slide = Slide::parse("3. three\n4. four\n");
-        let Block::List(list) = &slide.blocks[0] else {
+        let Block::List(list) = &slide.columns[0][0] else {
             panic!()
         };
         assert!(list.ordered);
@@ -534,7 +558,7 @@ mod tests {
     #[test]
     fn parses_nested_list() {
         let slide = Slide::parse("- outer\n  - inner one\n  - inner two\n");
-        let Block::List(list) = &slide.blocks[0] else {
+        let Block::List(list) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(list.items.len(), 1);
@@ -553,7 +577,7 @@ mod tests {
     #[test]
     fn parses_task_list_markers() {
         let slide = Slide::parse("- [x] done\n- [ ] todo\n- plain\n");
-        let Block::List(list) = &slide.blocks[0] else {
+        let Block::List(list) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(list.items[0].task, Some(true));
@@ -570,7 +594,7 @@ mod tests {
     fn parses_fenced_code_block_with_language() {
         let slide = Slide::parse("```rust\nfn main() {}\n```\n");
         assert_eq!(
-            slide.blocks,
+            slide.columns[0],
             vec![Block::CodeBlock {
                 language: Some("rust".to_string()),
                 code: "fn main() {}\n".to_string(),
@@ -581,7 +605,7 @@ mod tests {
     #[test]
     fn parses_fenced_code_block_without_language() {
         let slide = Slide::parse("```\nplain\n```\n");
-        let Block::CodeBlock { language, .. } = &slide.blocks[0] else {
+        let Block::CodeBlock { language, .. } = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(*language, None);
@@ -590,7 +614,7 @@ mod tests {
     #[test]
     fn code_block_preserves_markdown_syntax() {
         let slide = Slide::parse("```md\n# not a heading\n**not bold**\n```\n");
-        let Block::CodeBlock { code, .. } = &slide.blocks[0] else {
+        let Block::CodeBlock { code, .. } = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(code, "# not a heading\n**not bold**\n");
@@ -599,7 +623,7 @@ mod tests {
     #[test]
     fn parses_blockquote() {
         let slide = Slide::parse("> quoted text\n");
-        let Block::BlockQuote(inner) = &slide.blocks[0] else {
+        let Block::BlockQuote(inner) = &slide.columns[0][0] else {
             panic!()
         };
         let Block::Paragraph(spans) = &inner[0] else {
@@ -611,7 +635,7 @@ mod tests {
     #[test]
     fn parses_nested_blockquote() {
         let slide = Slide::parse("> outer\n>\n> > inner\n");
-        let Block::BlockQuote(outer) = &slide.blocks[0] else {
+        let Block::BlockQuote(outer) = &slide.columns[0][0] else {
             panic!()
         };
         assert!(outer.iter().any(|b| matches!(b, Block::BlockQuote(_))));
@@ -622,14 +646,14 @@ mod tests {
         // `---` is a slide separator (handled by the splitter), but `***`
         // still reaches the markdown parser as a thematic break.
         let slide = Slide::parse("above\n\n***\n\nbelow\n");
-        assert!(slide.blocks.contains(&Block::Rule));
+        assert!(slide.columns[0].contains(&Block::Rule));
     }
 
     #[test]
     fn comments_become_notes_and_do_not_render() {
         let slide = Slide::parse("# Title\n\n<!-- remember to smile -->\n\ntext\n");
         assert_eq!(slide.notes, vec!["remember to smile"]);
-        assert!(!slide.blocks.iter().any(|b| match b {
+        assert!(!slide.columns[0].iter().any(|b| match b {
             Block::Paragraph(spans) => text_of(spans).contains("smile"),
             _ => false,
         }));
@@ -639,7 +663,7 @@ mod tests {
     fn inline_comments_become_notes() {
         let slide = Slide::parse("hello <!-- inline note --> world\n");
         assert_eq!(slide.notes, vec!["inline note"]);
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(text_of(spans), "hello  world");
@@ -666,7 +690,7 @@ mod tests {
     #[test]
     fn tabs_in_text_expand_to_spaces() {
         let slide = Slide::parse("a\tb");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(text_of(spans), "a    b");
@@ -675,7 +699,7 @@ mod tests {
     #[test]
     fn other_html_is_ignored() {
         let slide = Slide::parse("a <span>b</span> c\n\n<div>\nblock\n</div>\n");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         // Inline tags are dropped; their text content remains.
@@ -686,7 +710,7 @@ mod tests {
     fn image_alone_becomes_an_image_block() {
         let slide = Slide::parse("![a chart](chart.png)");
         assert_eq!(
-            slide.blocks,
+            slide.columns[0],
             vec![Block::Image {
                 source: "chart.png".to_string(),
                 alt: "a chart".to_string(),
@@ -697,7 +721,7 @@ mod tests {
     #[test]
     fn image_without_alt_uses_url_as_label() {
         let slide = Slide::parse("![](chart.png)");
-        let Block::Image { alt, .. } = &slide.blocks[0] else {
+        let Block::Image { alt, .. } = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(alt, "chart.png");
@@ -706,7 +730,7 @@ mod tests {
     #[test]
     fn inline_image_stays_a_span() {
         let slide = Slide::parse("see ![the chart](c.png) here");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         let img = spans.iter().find(|s| s.image.is_some()).unwrap();
@@ -735,7 +759,7 @@ mod tests {
     #[test]
     fn adjacent_same_style_spans_merge() {
         let slide = Slide::parse("one two three");
-        let Block::Paragraph(spans) = &slide.blocks[0] else {
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
             panic!()
         };
         assert_eq!(spans.len(), 1);
@@ -744,15 +768,50 @@ mod tests {
     #[test]
     fn empty_source_is_empty_slide() {
         let slide = Slide::parse("");
-        assert!(slide.blocks.is_empty());
+        assert!(slide.columns[0].is_empty());
         assert!(slide.notes.is_empty());
+    }
+
+    #[test]
+    fn parse_columns_builds_one_column_per_source() {
+        let slide = Slide::parse_columns(&["left".to_string(), "# Right".to_string()]);
+        assert_eq!(slide.columns.len(), 2);
+        assert!(matches!(slide.columns[0][0], Block::Paragraph(_)));
+        assert!(matches!(slide.columns[1][0], Block::Heading { .. }));
+    }
+
+    #[test]
+    fn parse_columns_merges_notes_in_order() {
+        let slide = Slide::parse_columns(&[
+            "a\n\n<!-- first -->".to_string(),
+            "b\n\n<!-- second -->".to_string(),
+        ]);
+        assert_eq!(slide.notes, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn parse_columns_of_nothing_yields_one_empty_column() {
+        let slide = Slide::parse_columns(&[]);
+        assert_eq!(slide.columns.len(), 1);
+        assert!(slide.columns[0].is_empty());
+    }
+
+    #[test]
+    fn title_found_in_a_later_column() {
+        let slide = Slide::parse_columns(&["just text".to_string(), "## The Title".to_string()]);
+        assert_eq!(slide.title_text().as_deref(), Some("The Title"));
+    }
+
+    #[test]
+    fn parse_is_a_single_column() {
+        let slide = Slide::parse("hello");
+        assert_eq!(slide.columns.len(), 1);
     }
 
     #[test]
     fn multiple_blocks_in_order() {
         let slide = Slide::parse("# T\n\npara\n\n- item\n\n```\ncode\n```\n\n> quote\n");
-        let kinds: Vec<&str> = slide
-            .blocks
+        let kinds: Vec<&str> = slide.columns[0]
             .iter()
             .map(|b| match b {
                 Block::Heading { .. } => "heading",
