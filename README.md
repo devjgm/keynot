@@ -15,8 +15,11 @@ but it's not, and it lives in your terminal, like you.
 - One `.keynot` file per presentation: YAML frontmatter for metadata and
   theming, slides in plain markdown separated by `---`, HTML comments as
   speaker notes (a format in the spirit of [marp](https://marp.app))
-- Renders headings, emphasis, lists, blockquotes, links, and
-  syntax-highlighted code blocks with [ratatui](https://ratatui.rs)
+- Renders headings, emphasis, lists, blockquotes, and links with
+  [ratatui](https://ratatui.rs); code blocks are syntax-highlighted
+  little terminal windows, traffic lights and all
+- Background gradients -- vertical, horizontal, or radial fades between
+  any colors, in plain YAML (the default dark theme ships one)
 - Real images in the terminal via
   [ratatui-image](https://github.com/ratatui/ratatui-image): kitty,
   iTerm2, and sixel graphics, with a half-block fallback everywhere
