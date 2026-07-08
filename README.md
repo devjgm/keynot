@@ -29,6 +29,8 @@ but it's not, and it lives in your terminal, like you.
 
 ## Install
 
+From https://crates.io/crates/keynot
+
 ```sh
 cargo install --locked keynot
 ```

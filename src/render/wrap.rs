@@ -81,6 +81,50 @@ pub fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>>
     lines
 }
 
+/// Split spans at display column `at`: everything left of it, and
+/// everything at or right of it. A wide character straddling the
+/// boundary goes right, with a pad space keeping the left side's width.
+pub fn split_spans_at(
+    spans: Vec<Span<'static>>,
+    at: usize,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut width = 0usize;
+    for span in spans {
+        let span_width = display_width(&span.content);
+        if width + span_width <= at && right.is_empty() {
+            width += span_width;
+            left.push(span);
+        } else if width >= at || !right.is_empty() {
+            right.push(span);
+        } else {
+            let mut head = String::new();
+            let mut tail = String::new();
+            for ch in span.content.chars() {
+                let ch_width = ch.width().unwrap_or(0);
+                if width + ch_width <= at && tail.is_empty() {
+                    head.push(ch);
+                    width += ch_width;
+                } else {
+                    tail.push(ch);
+                }
+            }
+            if width < at {
+                head.push_str(&" ".repeat(at - width));
+                width = at;
+            }
+            if !head.is_empty() {
+                left.push(Span::styled(head, span.style));
+            }
+            if !tail.is_empty() {
+                right.push(Span::styled(tail, span.style));
+            }
+        }
+    }
+    (left, right)
+}
+
 /// Total display width of styled spans.
 pub fn spans_width(spans: &[Span]) -> usize {
     spans.iter().map(|s| display_width(&s.content)).sum()
@@ -149,6 +193,50 @@ fn tokenize(text: &str) -> Vec<Token<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_at_zero_puts_everything_right() {
+        let (l, r) = split_spans_at(vec![Span::raw("abc")], 0);
+        assert!(l.is_empty());
+        assert_eq!(r[0].content, "abc");
+    }
+
+    #[test]
+    fn split_at_exact_span_boundary() {
+        let spans = vec![Span::raw("ab"), Span::raw("cd")];
+        let (l, r) = split_spans_at(spans, 2);
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].content, "ab");
+        assert_eq!(r[0].content, "cd");
+    }
+
+    #[test]
+    fn split_mid_span_preserves_style() {
+        use ratatui::style::Style;
+        let spans = vec![Span::styled("abcd", Style::new().bold())];
+        let (l, r) = split_spans_at(spans, 3);
+        assert_eq!(l[0].content, "abc");
+        assert_eq!(r[0].content, "d");
+        assert_eq!(l[0].style, r[0].style, "style survives the split");
+    }
+
+    #[test]
+    fn split_beyond_the_end_leaves_right_empty() {
+        let (l, r) = split_spans_at(vec![Span::raw("ab")], 10);
+        assert_eq!(l[0].content, "ab");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn wide_char_straddling_the_boundary_goes_right_with_a_pad() {
+        // "a" (1 cell) + CJK (2 cells), split at 2: the wide char cannot
+        // be halved, so it moves right and a space keeps the left width.
+        let (l, r) = split_spans_at(vec![Span::raw("a\u{4e16}b")], 2);
+        let left: String = l.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(left, "a ");
+        let right: String = r.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(right, "\u{4e16}b");
+    }
     use ratatui::style::{Color, Style};
 
     fn plain(text: &str) -> Span<'static> {

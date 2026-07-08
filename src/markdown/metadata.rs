@@ -1,13 +1,43 @@
 //! Presentation-wide metadata parsed from the YAML frontmatter.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
+
+/// The frontmatter keys keynot understands. Keep in lockstep with the
+/// [`Metadata`] fields; `keynot check` lists these when it finds an
+/// unknown key.
+pub const KNOWN_KEYS: &[&str] = &[
+    "title",
+    "author",
+    "date",
+    "theme",
+    "colors",
+    "code_theme",
+    "transition",
+    "highlight",
+    "footer",
+];
+
+/// The `colors:` sub-keys keynot understands (see [`ColorOverrides`]).
+pub const KNOWN_COLOR_KEYS: &[&str] = &[
+    "background",
+    "text",
+    "heading",
+    "accent",
+    "link",
+    "blockquote",
+    "code_background",
+];
 
 /// Metadata from the frontmatter at the top of a `.keynot` file.
 ///
-/// All fields are optional; unknown fields are ignored so files stay
-/// forward-compatible with newer keynot versions. Known fields with
-/// invalid values (e.g. a misspelled transition) are parse errors.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+/// All fields are optional. Unrecognized keys parse fine but are
+/// collected rather than dropped: `keynot check` errors on them (a
+/// typoed key that silently did nothing would be the harder bug to
+/// spot), while `keynot play` ignores them so a deck written for a
+/// newer keynot still plays on an older one. Invalid values (e.g. a
+/// misspelled transition name) are parse errors everywhere.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default)]
 pub struct Metadata {
     /// Presentation title, shown in the footer.
@@ -28,6 +58,10 @@ pub struct Metadata {
     pub highlight: HighlightStyle,
     /// Whether to draw the footer (title, author, slide counter).
     pub footer: Option<bool>,
+    /// Keys keynot does not recognize, kept for `keynot check` (see
+    /// [`Metadata::unknown_keys`]).
+    #[serde(flatten)]
+    pub(crate) unknown: BTreeMap<String, serde_norway::Value>,
 }
 
 /// Slide transition style, the `transition:` frontmatter key.
@@ -60,7 +94,7 @@ pub enum HighlightStyle {
 
 /// Optional color overrides. Values accept hex (`"#rrggbb"`), ANSI names
 /// (`"red"`, `"lightcyan"`), or indexed colors (`"42"`).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default)]
 pub struct ColorOverrides {
     pub background: Option<String>,
@@ -70,9 +104,23 @@ pub struct ColorOverrides {
     pub link: Option<String>,
     pub blockquote: Option<String>,
     pub code_background: Option<String>,
+    /// Sub-keys keynot does not recognize, kept for `keynot check`.
+    #[serde(flatten)]
+    pub(crate) unknown: BTreeMap<String, serde_norway::Value>,
 }
 
 impl Metadata {
+    /// Frontmatter keys that were present but not recognized: top-level
+    /// keys first, then `colors.` sub-keys, each group sorted. `keynot
+    /// check` errors when this is non-empty; `keynot play` never looks.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        self.unknown
+            .keys()
+            .cloned()
+            .chain(self.colors.unknown.keys().map(|k| format!("colors.{k}")))
+            .collect()
+    }
+
     /// Parse frontmatter YAML. Empty (or comment-only) input yields defaults.
     pub fn from_yaml(yaml: &str) -> Result<Self, serde_norway::Error> {
         if yaml.trim().is_empty() {
@@ -181,9 +229,44 @@ colors:
     }
 
     #[test]
-    fn unknown_fields_are_ignored() {
-        let m = Metadata::from_yaml("title: Hi\nfuture_option: 42\n").unwrap();
-        assert_eq!(m.title.as_deref(), Some("Hi"));
+    fn unknown_keys_parse_but_are_collected() {
+        let m = Metadata::from_yaml("title: Hi\ntranstion: fade\n").unwrap();
+        assert_eq!(m.title.as_deref(), Some("Hi"), "the deck still plays");
+        assert_eq!(m.unknown_keys(), vec!["transtion"]);
+    }
+
+    #[test]
+    fn unknown_color_keys_are_collected_with_their_prefix() {
+        let m = Metadata::from_yaml("colors:\n  backgroud: '#000000'\n").unwrap();
+        assert_eq!(m.unknown_keys(), vec!["colors.backgroud"]);
+    }
+
+    #[test]
+    fn known_keys_produce_no_unknowns() {
+        // parses_all_fields exercises every key; this pins that the
+        // KNOWN_KEYS listing stays in lockstep with the struct.
+        let yaml = "\
+title: T
+author: A
+date: D
+theme: dark
+code_theme: Dark+
+transition: fade
+highlight: dim
+footer: true
+colors:
+  background: '#101020'
+  text: '#ffffff'
+  heading: red
+  accent: blue
+  link: cyan
+  blockquote: green
+  code_background: '#000000'
+";
+        let m = Metadata::from_yaml(yaml).unwrap();
+        assert!(m.unknown_keys().is_empty());
+        assert_eq!(KNOWN_KEYS.len(), 9);
+        assert_eq!(KNOWN_COLOR_KEYS.len(), 7);
     }
 
     #[test]

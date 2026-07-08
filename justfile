@@ -20,8 +20,12 @@ fmt:
 msrv:
     cargo +1.90 check --locked
 
+# Validate every .keynot file in the repo with `keynot check`
+check-examples:
+    find . -name '*.keynot' -not -path './target/*' -print0 | xargs -0 -n1 cargo run --quiet -- check
+
 # Everything CI checks
-ci: test lint msrv
+ci: test lint msrv check-examples
 
 # Regenerate the README screenshots from the tour (the README.md gallery updates by hand)
 screenshots:

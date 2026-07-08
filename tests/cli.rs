@@ -180,6 +180,44 @@ Caused by:
 }
 
 #[test]
+fn check_fails_on_misspelled_frontmatter_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.keynot");
+    fs_err::write(&file, "---\ntitle: T\ntranstion: fade\n---\n# S\n").unwrap();
+
+    keynot()
+        .arg("check")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr_eq(str![[r#"
+Error: unknown frontmatter key `transtion` (line 3) (valid keys: title, author, date, theme, colors, code_theme, transition, highlight, footer; colors: background, text, heading, accent, link, blockquote, code_background)
+...
+"#]]);
+}
+
+#[test]
+fn check_reports_every_misspelled_key_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("t.keynot");
+    fs_err::write(
+        &file,
+        "---\nhilight: dim\ntranstion: fade\ncolors:\n  backgroud: red\n---\n# S\n",
+    )
+    .unwrap();
+
+    keynot()
+        .arg("check")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr_eq(str![[r#"
+Error: unknown frontmatter keys `hilight` (line 2), `transtion` (line 3), `colors.backgroud` (line 5) (valid keys: [..])
+...
+"#]]);
+}
+
+#[test]
 fn check_fails_on_unknown_theme() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("t.keynot");

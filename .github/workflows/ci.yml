@@ -31,6 +31,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked
 
+  # Every .keynot file in the repo must pass `keynot check` (which is
+  # strict about frontmatter typos, unlike `play`).
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: find . -name '*.keynot' -not -path './target/*' -print0 | xargs -0 -n1 cargo run --quiet -- check
+
   clippy:
     runs-on: ubuntu-latest
     steps:

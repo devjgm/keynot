@@ -164,8 +164,9 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// (settled) frame as an image.
 fn render_screen(raw: &[u8]) -> RgbaImage {
     let dir = std::env::temp_dir();
-    let cast = dir.join("keynot-xtask.cast");
-    let gif = dir.join("keynot-xtask.gif");
+    // PID-unique names so concurrent invocations cannot collide.
+    let cast = dir.join(format!("keynot-xtask-{}.cast", std::process::id()));
+    let gif = dir.join(format!("keynot-xtask-{}.gif", std::process::id()));
     let header = serde_json::json!({"version": 2, "width": COLS, "height": ROWS});
     let event = serde_json::json!([0.1, "o", String::from_utf8_lossy(raw)]);
     fs_err::write(&cast, format!("{header}\n{event}\n")).unwrap();

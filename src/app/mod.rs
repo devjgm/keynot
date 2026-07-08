@@ -4,7 +4,9 @@ mod config;
 mod images;
 
 use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Slide, Transition};
-use crate::render::{Highlighter, RenderContext, RenderedSlide, render_slide};
+use crate::render::{
+    ColumnSpan, Highlighter, RenderContext, RenderedSlide, render_slide, split_spans_at,
+};
 use crate::theme::Theme;
 use config::TransitionEffects;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -22,6 +24,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tachyonfx::{Effect, EffectRenderer};
+use unicode_width::UnicodeWidthStr;
 
 /// Options for `keynot play`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -153,17 +156,17 @@ struct RenderCache {
     height: u16,
     rendered: RenderedSlide,
     paragraph: Paragraph<'static>,
-    /// Indices of non-blank lines: the highlight cursor's domain.
-    non_blank: Vec<usize>,
 }
 
-/// Style the line at `target` per the `highlight:` metadata key: an
-/// accent bar behind it, or dimming everything else.
+/// Style the line at row `target`, within `column`'s horizontal extent
+/// only, per the `highlight:` metadata key: an accent bar behind it, or
+/// dimming everything else. Single-column slides pass a span covering
+/// the full width.
 fn style_highlight(
     theme: &Theme,
     style: HighlightStyle,
     text: &mut Text<'static>,
-    width: usize,
+    column: &ColumnSpan,
     target: usize,
 ) {
     match style {
@@ -171,24 +174,52 @@ fn style_highlight(
             for (i, line) in text.lines.iter_mut().enumerate() {
                 if i != target {
                     line.style = line.style.add_modifier(Modifier::DIM);
+                    continue;
                 }
+                // On the target row, the other columns' segments dim too.
+                let spans = std::mem::take(&mut line.spans);
+                let (before, rest) = split_spans_at(spans, column.x);
+                let (mid, after) = split_spans_at(rest, column.width);
+                let dim = |mut s: Span<'static>| {
+                    s.style = s.style.add_modifier(Modifier::DIM);
+                    s
+                };
+                let mut joined: Vec<Span> = before.into_iter().map(dim).collect();
+                joined.extend(mid);
+                joined.extend(after.into_iter().map(dim));
+                line.spans = joined;
             }
         }
         HighlightStyle::Bar => {
-            // Repaint the line onto a full-width accent bar. The bar
-            // owns the colors (fg becomes the background color, since
-            // arbitrary foregrounds like syntax colors are unreadable
-            // on the accent); bold/italic and such survive.
+            // Repaint the column's segment of the row onto an accent bar
+            // exactly the column's width. The bar owns the colors (fg
+            // becomes the background color, since arbitrary foregrounds
+            // like syntax colors are unreadable on the accent);
+            // bold/italic and such survive.
             let bar = Style::default().fg(theme.background).bg(theme.accent);
             let line = &mut text.lines[target];
-            line.style = line.style.patch(bar);
-            for span in &mut line.spans {
-                span.style = span.style.patch(bar);
+            let base = line.style;
+            let spans = std::mem::take(&mut line.spans);
+            let (before, rest) = split_spans_at(spans, column.x);
+            let (mid, after) = split_spans_at(rest, column.width);
+
+            let mut joined = before;
+            let lead: usize = joined.iter().map(|s| s.content.width()).sum();
+            if lead < column.x {
+                // The row may end before this column starts; bridge it.
+                joined.push(Span::raw(" ".repeat(column.x - lead)));
             }
-            let pad = width.saturating_sub(line.width());
-            if pad > 0 {
-                line.spans.push(Span::styled(" ".repeat(pad), bar));
+            let mut bar_width = 0;
+            for mut span in mid {
+                bar_width += span.content.width();
+                span.style = base.patch(span.style).patch(bar);
+                joined.push(span);
             }
+            if bar_width < column.width {
+                joined.push(Span::styled(" ".repeat(column.width - bar_width), bar));
+            }
+            joined.extend(after);
+            line.spans = joined;
         }
     }
 }
@@ -207,12 +238,12 @@ struct App {
     /// Slide number being typed in the outline (1-based, as displayed).
     outline_input: Option<usize>,
     help: bool,
-    /// Speaker's line highlight: an index into the current slide's
-    /// non-blank rendered lines, styled per the `highlight:` metadata key.
-    highlight: Option<usize>,
-    /// How many lines were highlightable in the last rendered frame;
-    /// updated at draw time (it depends on wrapping width).
-    highlight_count: usize,
+    /// Speaker's line highlight: (column, index into that column's
+    /// non-blank rendered lines), styled per the `highlight:` key.
+    highlight: Option<(usize, usize)>,
+    /// Fresh image decodes from a reload, arriving from a worker thread
+    /// (network fetches must never block the draw loop).
+    pending_images: Option<std::sync::mpsc::Receiver<HashMap<String, images::Decoded>>>,
     /// Set by the `!` key: drop to an interactive shell on the next tick.
     shell_requested: bool,
     /// Effect running on the incoming (current) slide.
@@ -260,7 +291,7 @@ impl App {
             outline_input: None,
             help: false,
             highlight: None,
-            highlight_count: 0,
+            pending_images: None,
             shell_requested: false,
             effect: None,
             outgoing: None,
@@ -272,11 +303,14 @@ impl App {
 
     fn run(&mut self, terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
         loop {
+            self.adopt_pending_images();
             let elapsed = self.last_frame.elapsed();
             self.last_frame = Instant::now();
             terminal.draw(|frame| self.draw(frame, elapsed))?;
             let timeout = if self.effect.is_some() || self.outgoing.is_some() {
                 Duration::from_millis(16)
+            } else if self.pending_images.is_some() {
+                Duration::from_millis(100)
             } else {
                 Duration::from_millis(500)
             };
@@ -354,17 +388,14 @@ impl App {
 
     fn slides_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Right
-            | KeyCode::PageDown
-            | KeyCode::Enter
-            | KeyCode::Char(' ')
-            | KeyCode::Char('l')
-            | KeyCode::Char('n') => self.goto(self.current + 1),
-            KeyCode::Left
-            | KeyCode::PageUp
-            | KeyCode::Backspace
-            | KeyCode::Char('h')
-            | KeyCode::Char('p') => self.goto(self.current.saturating_sub(1)),
+            KeyCode::Right | KeyCode::Char('l') => self.highlight_sideways(1),
+            KeyCode::Left | KeyCode::Char('h') => self.highlight_sideways(-1),
+            KeyCode::PageDown | KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('n') => {
+                self.goto(self.current + 1)
+            }
+            KeyCode::PageUp | KeyCode::Backspace | KeyCode::Char('p') => {
+                self.goto(self.current.saturating_sub(1))
+            }
             KeyCode::Down | KeyCode::Char('j') => self.highlight_move(1),
             KeyCode::Up | KeyCode::Char('k') => self.highlight_move(-1),
             KeyCode::Home | KeyCode::Char('g') => self.goto(0),
@@ -378,18 +409,84 @@ impl App {
         }
     }
 
-    /// Move the line highlight down (`+1`) or up (`-1`). Starting fresh,
-    /// down highlights the first line and up the last.
+    /// The current slide's column geometry, straight from the render
+    /// cache (empty before the first draw), so the highlight keys and
+    /// the drawn frame can never disagree.
+    fn columns(&self) -> &[ColumnSpan] {
+        self.render_cache
+            .as_ref()
+            .map(|c| c.rendered.columns.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Move the line highlight down (`+1`) or up (`-1`) within its
+    /// column. Starting fresh, down highlights the first line of the
+    /// first (highlightable) column, up its last line.
     fn highlight_move(&mut self, delta: isize) {
-        if self.highlight_count == 0 {
+        match self.highlight {
+            Some((col, pos)) => {
+                let Some(span) = self.columns().get(col) else {
+                    return;
+                };
+                let count = span.non_blank.len();
+                if count > 0 {
+                    self.highlight = Some((col, pos.saturating_add_signed(delta).min(count - 1)));
+                }
+            }
+            None => {
+                let Some(col) = self.next_highlight_column(-1, 1) else {
+                    return;
+                };
+                let last = self.columns()[col].non_blank.len() - 1;
+                self.highlight = Some((col, if delta < 0 { last } else { 0 }));
+            }
+        }
+    }
+
+    /// Right/left: while highlighting, move the highlight to the next
+    /// or previous column with highlightable lines; walking past the
+    /// slide's edge changes slides (which drops the highlight). With no
+    /// highlight, plain slide navigation -- so single-column slides
+    /// behave as if columns did not exist.
+    fn highlight_sideways(&mut self, dir: isize) {
+        if let Some((col, _)) = self.highlight
+            && let Some(next) = self.next_highlight_column(col as isize, dir)
+        {
+            self.highlight = Some((next, 0));
             return;
         }
-        let last = self.highlight_count - 1;
-        self.highlight = Some(match (self.highlight, delta) {
-            (None, d) if d < 0 => last,
-            (None, _) => 0,
-            (Some(pos), d) => pos.saturating_add_signed(d).min(last),
-        });
+        if dir > 0 {
+            self.goto(self.current + 1);
+        } else {
+            self.goto(self.current.saturating_sub(1));
+        }
+    }
+
+    /// The nearest column in direction `dir` from `from` (exclusive)
+    /// with at least one highlightable line.
+    fn next_highlight_column(&self, from: isize, dir: isize) -> Option<usize> {
+        let columns = self.columns();
+        let mut col = from + dir;
+        while col >= 0 && (col as usize) < columns.len() {
+            if !columns[col as usize].non_blank.is_empty() {
+                return Some(col as usize);
+            }
+            col += dir;
+        }
+        None
+    }
+
+    /// Adopt a reload's freshly decoded images once the worker thread
+    /// delivers them, and re-render so their placements take effect.
+    fn adopt_pending_images(&mut self) {
+        if let Some(rx) = &self.pending_images
+            && let Ok(decoded) = rx.try_recv()
+        {
+            self.pending_images = None;
+            self.images.adopt(decoded);
+            self.error = self.images.take_errors().into_iter().next();
+            self.render_cache = None;
+        }
     }
 
     /// Keys in outline mode; returns true to quit.
@@ -491,8 +588,20 @@ impl App {
                 self.pending_enter = None;
                 self.highlight = None;
                 self.images.clear();
-                self.images.preload_all(&self.presentation.slides);
-                self.error = self.images.take_errors().into_iter().next();
+                // Local images re-read on demand (fast); URL images are
+                // fetched by a worker so a slow network never freezes
+                // the show, and adopted when the decode lands.
+                let slides = self.presentation.slides.clone();
+                let base = self
+                    .path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(images::decode_all(&slides, &base));
+                });
+                self.pending_images = Some(rx);
                 self.render_cache = None;
             }
             Err(err) => {
@@ -555,14 +664,6 @@ impl App {
         let slide = &self.presentation.slides[index];
         let rendered = render_slide(slide, &ctx, content.width as usize);
 
-        let non_blank: Vec<usize> = rendered
-            .text
-            .lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| line.width() > 0)
-            .map(|(i, _)| i)
-            .collect();
         let paragraph = Paragraph::new(rendered.text.clone());
         tracing::debug!(
             index,
@@ -577,7 +678,6 @@ impl App {
             height: content.height,
             rendered,
             paragraph,
-            non_blank,
         });
     }
 
@@ -587,12 +687,15 @@ impl App {
         self.ensure_rendered(index, content);
         let cache = self.render_cache.as_ref().expect("cache was just filled");
 
-        // The highlight cursor indexes the cached non-blank lines; the
-        // count can shrink on resize, so keep it in range.
-        self.highlight_count = cache.non_blank.len();
+        // The highlight cursor indexes a column's non-blank lines;
+        // geometry can change on resize or reload, so re-validate.
         self.highlight = match self.highlight {
-            Some(_) if cache.non_blank.is_empty() => None,
-            Some(pos) => Some(pos.min(cache.non_blank.len() - 1)),
+            Some((col, pos)) => match cache.rendered.columns.get(col) {
+                Some(span) if !span.non_blank.is_empty() => {
+                    Some((col, pos.min(span.non_blank.len() - 1)))
+                }
+                _ => None,
+            },
             None => None,
         };
 
@@ -600,15 +703,16 @@ impl App {
         let y = content.y + (content.height - height) / 2;
         let slide_area = Rect::new(content.x, y, content.width, height);
 
-        if let Some(pos) = self.highlight {
+        if let Some((col, pos)) = self.highlight {
             // Highlighting styles a copy so the cached text stays pristine.
+            let span = &cache.rendered.columns[col];
             let mut text = cache.rendered.text.clone();
             style_highlight(
                 &self.theme,
                 self.presentation.metadata.highlight,
                 &mut text,
-                content.width as usize,
-                cache.non_blank[pos],
+                span,
+                span.non_blank[pos],
             );
             frame.render_widget(Paragraph::new(text), slide_area);
         } else {
@@ -620,6 +724,10 @@ impl App {
             if effect.done() {
                 self.outgoing = None;
                 self.effect = self.pending_enter.take();
+                // A highlight set during the exit animation indexed the
+                // outgoing slide's geometry; drop it rather than letting
+                // it land somewhere arbitrary on the incoming slide.
+                self.highlight = None;
             }
         } else if let Some(effect) = &mut self.effect {
             frame.render_effect(effect, slide_area, elapsed.into());
@@ -744,6 +852,7 @@ impl App {
             ("right, space, l, n", "next slide"),
             ("left, bksp, h, p", "previous slide"),
             ("down / up, j / k", "highlight line"),
+            ("right / left (highlighting)", "next / previous column"),
             ("esc", "clear highlight"),
             ("g / G", "first / last slide"),
             ("o", "outline"),
@@ -890,51 +999,52 @@ mod tests {
 
     #[test]
     fn down_arrow_highlights_lines_not_slides() {
-        let mut app = test_app("# A\n---\n# B\n");
-        app.highlight_count = 3;
+        let mut app = test_app("a\n\nb\n\nc\n---\n# B\n");
+        draw(&mut app, Duration::ZERO);
         press(&mut app, KeyCode::Down);
         assert_eq!(app.current, 0, "down must not change slides");
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.highlight, Some(1));
+        assert_eq!(app.highlight, Some((0, 1)));
         press(&mut app, KeyCode::Up);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         press(&mut app, KeyCode::Up);
-        assert_eq!(app.highlight, Some(0), "clamps at the top");
+        assert_eq!(app.highlight, Some((0, 0)), "clamps at the top");
     }
 
     #[test]
     fn up_from_no_highlight_starts_at_last_line() {
-        let mut app = test_app("# A\n");
-        app.highlight_count = 4;
+        let mut app = test_app("a\n\nb\n\nc\n\nd\n");
+        draw(&mut app, Duration::ZERO);
         press(&mut app, KeyCode::Up);
-        assert_eq!(app.highlight, Some(3));
+        assert_eq!(app.highlight, Some((0, 3)));
     }
 
     #[test]
     fn highlight_clamps_at_bottom() {
-        let mut app = test_app("# A\n");
-        app.highlight_count = 2;
+        let mut app = test_app("a\n\nb\n");
+        draw(&mut app, Duration::ZERO);
         for _ in 0..5 {
             press(&mut app, KeyCode::Down);
         }
-        assert_eq!(app.highlight, Some(1));
+        assert_eq!(app.highlight, Some((0, 1)));
     }
 
     #[test]
-    fn no_highlight_without_lines() {
+    fn no_highlight_before_the_first_draw() {
+        // Until a draw fills the render cache there is no geometry to
+        // highlight against; the key is a no-op.
         let mut app = test_app("# A\n");
-        app.highlight_count = 0;
         press(&mut app, KeyCode::Down);
         assert_eq!(app.highlight, None);
     }
 
     #[test]
     fn esc_clears_highlight_and_never_opens_outline() {
-        let mut app = test_app("# A\n");
-        app.highlight_count = 2;
+        let mut app = test_app("a\n\nb\n");
+        draw(&mut app, Duration::ZERO);
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.highlight, None);
         assert_eq!(app.mode, Mode::Slides);
@@ -970,10 +1080,10 @@ mod tests {
 
     #[test]
     fn changing_slides_clears_highlight() {
-        let mut app = test_app("# A\n---\n# B\n");
-        app.highlight_count = 2;
+        let mut app = test_app("aa\n\nbb\n---\n# B\n");
+        draw(&mut app, Duration::ZERO);
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         press(&mut app, KeyCode::Right);
         assert_eq!(app.highlight, None);
     }
@@ -981,10 +1091,10 @@ mod tests {
     #[test]
     fn vim_keys_follow_arrow_semantics() {
         let mut app = test_app("# A\n---\n# B\n");
-        app.highlight_count = 3;
+        draw(&mut app, Duration::ZERO);
         press(&mut app, KeyCode::Char('j'));
         assert_eq!(app.current, 0);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.current, 1);
     }
@@ -996,14 +1106,14 @@ mod tests {
         // Two one-line paragraphs with distinct letters.
         let mut app = test_app("xxx\n\nzzz\n");
         app.presentation.metadata.highlight = HighlightStyle::Dim;
-        app.highlight = Some(0);
+        app.highlight = Some((0, 0));
         let mut terminal = ratatui::Terminal::new(TestBackend::new(60, 20)).unwrap();
         terminal
             .draw(|frame| app.draw(frame, Duration::ZERO))
             .unwrap();
 
-        assert_eq!(app.highlight_count, 2);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.columns()[0].non_blank.len(), 2);
+        assert_eq!(app.highlight, Some((0, 0)));
         let buffer = terminal.backend().buffer();
         let mut saw = (false, false);
         for cell in buffer.content() {
@@ -1033,7 +1143,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = test_app("xxx\n\nzzz\n");
-        app.highlight = Some(0);
+        app.highlight = Some((0, 0));
         let mut terminal = ratatui::Terminal::new(TestBackend::new(60, 20)).unwrap();
         terminal
             .draw(|frame| app.draw(frame, Duration::ZERO))
@@ -1083,7 +1193,7 @@ mod tests {
             .draw(|frame| app.draw(frame, Duration::ZERO))
             .unwrap();
         // Title, its underline rule, and two paragraphs; blank lines skip.
-        assert_eq!(app.highlight_count, 4);
+        assert_eq!(app.columns()[0].non_blank.len(), 4);
         assert_eq!(app.highlight, None, "drawing alone must not highlight");
     }
 
@@ -1331,6 +1441,41 @@ mod tests {
     }
 
     #[test]
+    fn reload_decodes_images_on_a_worker_and_adopts_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let red = image::RgbImage::from_pixel(60, 40, image::Rgb([255, 0, 0]));
+        red.save(dir.path().join("x.png")).unwrap();
+        let deck = dir.path().join("t.keynot");
+        fs_err::write(&deck, "![p](x.png)\n").unwrap();
+
+        let highlighter = Highlighter::new();
+        let loaded = load(&deck, &highlighter).unwrap();
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut app = App::new(
+            deck,
+            loaded,
+            highlighter,
+            Some(picker),
+            HashMap::new(),
+            PlayOptions::default(),
+        );
+
+        app.reload();
+        assert!(app.pending_images.is_some(), "worker spawned");
+        // The worker reads a local file; bounded wait for its delivery.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.pending_images.is_some() && Instant::now() < deadline {
+            app.adopt_pending_images();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.pending_images.is_none(), "decode adopted");
+        assert_eq!(app.error, None);
+        // The adopted image draws.
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(!image_columns(&terminal).is_empty());
+    }
+
+    #[test]
     fn image_draws_centered_in_a_single_column_slide() {
         let mut app = test_app_with_image("![pic](x.png)\n", "x.png");
         let terminal = draw(&mut app, Duration::ZERO);
@@ -1407,21 +1552,128 @@ mod tests {
         assert!(buffer_text(&terminal).contains("Col Title"));
     }
 
-    #[test]
-    fn highlight_bar_spans_a_column_row() {
-        let mut app = test_app("aaa\n|||\nbbb\n");
-        app.highlight = Some(0);
-        let terminal = draw(&mut app, Duration::ZERO);
+    /// Letter cells whose background is the accent bar.
+    fn letters_on_bar(terminal: &Terminal<TestBackend>, accent: ratatui::style::Color) -> String {
         let buffer = terminal.backend().buffer();
-        let accent = app.theme.accent;
-        // Both columns' text cells sit on the accent bar.
-        let mut on_bar = 0;
+        let mut on_bar = String::new();
         for cell in buffer.content() {
-            if (cell.symbol() == "a" || cell.symbol() == "b") && cell.bg == accent {
-                on_bar += 1;
+            if cell.symbol().chars().all(|c| c.is_ascii_lowercase())
+                && cell.symbol() != " "
+                && cell.bg == accent
+            {
+                on_bar.push_str(cell.symbol());
             }
         }
-        assert_eq!(on_bar, 6, "all six letters ride the bar");
+        on_bar
+    }
+
+    #[test]
+    fn highlight_bar_covers_only_its_column() {
+        let mut app = test_app("aaa\n|||\nbbb\n");
+        app.highlight = Some((0, 0));
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert_eq!(
+            letters_on_bar(&terminal, app.theme.accent),
+            "aaa",
+            "only the first column rides the bar"
+        );
+    }
+
+    #[test]
+    fn highlight_bar_follows_the_column() {
+        let mut app = test_app("aaa\n|||\nbbb\n");
+        app.highlight = Some((1, 0));
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert_eq!(letters_on_bar(&terminal, app.theme.accent), "bbb");
+    }
+
+    #[test]
+    fn right_moves_the_highlight_to_the_next_column() {
+        let mut app = test_app("aaa\n|||\nbbb\n---\n# Two\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.highlight, Some((0, 0)));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.highlight, Some((1, 0)), "into column 2, first line");
+        assert_eq!(app.current, 0, "still the same slide");
+    }
+
+    #[test]
+    fn right_past_the_last_column_changes_slides() {
+        let mut app = test_app("aaa\n|||\nbbb\n---\n# Two\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.current, 1, "walked off the right edge");
+        assert_eq!(app.highlight, None, "highlight dropped on slide change");
+    }
+
+    #[test]
+    fn left_past_the_first_column_changes_slides() {
+        let mut app = test_app("# One\n---\naaa\n|||\nbbb\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Right); // to the columns slide
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.highlight, Some((0, 0)));
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.current, 0, "walked off the left edge");
+        assert_eq!(app.highlight, None);
+    }
+
+    #[test]
+    fn moving_between_columns_lands_on_the_first_line() {
+        let mut app = test_app("a1\n\na2\n\na3\n|||\nb1\n\nb2\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.highlight, Some((0, 2)), "third line of column 1");
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.highlight, Some((1, 0)), "first line of column 2");
+    }
+
+    #[test]
+    fn image_only_columns_are_skipped_sideways() {
+        // Column 2 is a picture with no highlightable lines; right from
+        // column 1 walks straight past it off the slide.
+        let mut app = test_app_with_image("aaa\n|||\n![p](x.png)\n---\n# Two\n", "x.png");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.highlight, Some((0, 0)));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.current, 1, "the empty column does not trap the cursor");
+    }
+
+    #[test]
+    fn single_column_right_still_changes_slides_while_highlighting() {
+        let mut app = test_app("# One\n\ntext\n---\n# Two\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Down);
+        assert!(app.highlight.is_some());
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.current, 1, "exactly the pre-columns behavior");
+        assert_eq!(app.highlight, None);
+    }
+
+    #[test]
+    fn dim_highlight_dims_the_other_columns_segment() {
+        let mut app = test_app("---\nhighlight: dim\n---\naaa\n|||\nbbb\n");
+        app.highlight = Some((0, 0));
+        let terminal = draw(&mut app, Duration::ZERO);
+        let buffer = terminal.backend().buffer();
+        let (mut a_dim, mut b_dim) = (false, false);
+        for cell in buffer.content() {
+            if cell.symbol() == "a" {
+                a_dim |= cell.modifier.contains(Modifier::DIM);
+            }
+            if cell.symbol() == "b" {
+                b_dim |= cell.modifier.contains(Modifier::DIM);
+            }
+        }
+        assert!(!a_dim, "the highlighted column keeps full brightness");
+        assert!(b_dim, "the other column dims, even on the same row");
     }
 
     #[test]
@@ -1539,9 +1791,9 @@ mod tests {
         draw(&mut app, Duration::from_millis(1000));
         draw(&mut app, Duration::from_millis(1000));
         assert!(app.effect.is_none() && app.outgoing.is_none());
-        assert!(app.highlight_count > 0, "count: {}", app.highlight_count);
+        assert!(!app.columns().is_empty(), "geometry after transition");
         press(&mut app, KeyCode::Down);
-        assert_eq!(app.highlight, Some(0));
+        assert_eq!(app.highlight, Some((0, 0)));
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
             .draw(|frame| app.draw(frame, Duration::ZERO))

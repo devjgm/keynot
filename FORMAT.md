@@ -47,8 +47,12 @@ non-empty slide):
 
 The frontmatter configures the whole presentation. It must begin on line 1;
 a `---` anywhere else is a slide separator. The block is closed by `---`
-(or YAML's `...`). All keys are optional, and unknown keys are ignored so
-files keep working across keynot versions.
+(or YAML's `...`). All keys are optional. `keynot check` errors on any
+key it does not recognize (a typo like `transtion:` silently doing
+nothing would be worse) and lists the valid ones; `keynot play` ignores
+unknown keys, so a deck written for a newer keynot still opens on an
+older one. Invalid values (a misspelled transition name, a bad color)
+are errors everywhere.
 
 ```yaml
 ---
@@ -185,8 +189,10 @@ How columns behave:
 - There is no shared full-width region: a heading belongs to whichever
   column it is written in. Put it in the first column for a
   title-on-the-left look.
-- The speaker line highlight (up/down) operates on whole rows, spanning
-  all columns.
+- The speaker line highlight (up/down) works per column: down starts in
+  the first column, left/right move it between columns, and moving past
+  the slide's edge changes slides. Columns without highlightable lines
+  (e.g. just a picture) are skipped.
 
 ## Comments and speaker notes
 
@@ -206,6 +212,12 @@ Mention that the Q3 numbers are preliminary.
 
 Comments work inline too (`before <!-- hidden --> after`) and may span
 multiple lines. `keynot check` reports how many notes a file contains.
+
+Today, notes are parsed and counted but never displayed: there is no
+presenter view yet, so they live only in the source. A future version
+may surface them (e.g. a speaker window or an export); writing notes
+now is still worthwhile, both for that future and for readers of the
+file.
 
 ## Supported markdown
 
@@ -336,6 +348,7 @@ Keys during the show (press `?` anytime for this list):
 | right, space, `l`, `n`, page down | next slide           |
 | left, backspace, `h`, `p`, page up | previous slide      |
 | down / up, `j` / `k`         | highlight the next / previous line |
+| right / left (while highlighting) | move the highlight between columns; past the slide's edge, change slides |
 | esc                          | clear the line highlight  |
 | `g` / `G`, home / end        | first / last slide        |
 | `o`                          | toggle the outline overview |
@@ -355,8 +368,10 @@ it was.
 
 The line highlight is for speaking: press down to spotlight the first
 line of the slide and keep pressing to walk through the lines you are
-discussing. Blank lines are skipped. Esc (or changing slides) turns it
-off. The `highlight:` frontmatter key picks the look:
+discussing. Blank lines are skipped. On multi-column slides the
+highlight lives in one column at a time; left/right move it between
+columns, and moving past the outermost column changes slides. Esc (or
+changing slides) turns it off. The `highlight:` frontmatter key picks the look:
 
 | value | effect                                                        |
 |-------|---------------------------------------------------------------|

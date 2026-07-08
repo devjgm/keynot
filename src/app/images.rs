@@ -104,14 +104,6 @@ impl Images {
         }
     }
 
-    /// Load every image in the deck (used after reload; startup goes
-    /// through [`decode_all`] + [`Images::adopt`] instead).
-    pub fn preload_all(&mut self, slides: &[Slide]) {
-        for slide in slides {
-            self.preload(slide);
-        }
-    }
-
     /// Forget everything (used on reload, so edited images are re-read).
     pub fn clear(&mut self) {
         self.cache.clear();
@@ -130,6 +122,13 @@ impl Images {
         // Without graphics support the image can never draw; skip the
         // (possibly network-bound) decode entirely.
         if self.picker.is_none() {
+            self.cache.insert(source.to_string(), None);
+            return;
+        }
+        // Never fetch over the network on the draw path: URL decodes
+        // happen off-thread (startup pre-decode or the reload worker).
+        // Until one lands, a placeholder beats a frozen UI.
+        if is_url(source) {
             self.cache.insert(source.to_string(), None);
             return;
         }
@@ -223,6 +222,18 @@ fn fit(natural: (u16, u16), max: (u16, u16)) -> (u16, u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_sources_are_never_fetched_on_the_draw_path() {
+        // No network in unit tests: if load() tried to fetch, this
+        // would record a connection error. A placeholder means the
+        // fetch is deferred to a worker thread.
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut images = Images::new(Some(picker), PathBuf::new());
+        images.load("https://example.invalid/pic.png");
+        assert!(images.cache.contains_key("https://example.invalid/pic.png"));
+        assert!(images.take_errors().is_empty(), "no error recorded");
+    }
 
     #[test]
     fn small_image_is_not_scaled_up() {

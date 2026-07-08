@@ -5,4 +5,5 @@ mod slide;
 mod wrap;
 
 pub use highlight::Highlighter;
-pub(crate) use slide::{RenderContext, RenderedSlide, render_slide};
+pub(crate) use slide::{ColumnSpan, RenderContext, RenderedSlide, render_slide};
+pub(crate) use wrap::split_spans_at;

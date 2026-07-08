@@ -20,7 +20,9 @@ mod metadata;
 mod slide;
 mod splitter;
 
-pub use metadata::{ColorOverrides, HighlightStyle, Metadata, Transition};
+pub use metadata::{
+    ColorOverrides, HighlightStyle, KNOWN_COLOR_KEYS, KNOWN_KEYS, Metadata, Transition,
+};
 pub use slide::{Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide};
 
 /// A fully parsed presentation.

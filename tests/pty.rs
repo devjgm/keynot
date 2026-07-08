@@ -330,6 +330,21 @@ fn kitty_transmission_survives_a_transition() {
 }
 
 #[test]
+fn play_tolerates_unknown_frontmatter_keys() {
+    // `keynot check` errors on a typoed key, but the show must go on:
+    // the same deck plays (see FORMAT.md on the check/play split).
+    let dir = tempfile::tempdir().unwrap();
+    fs_err::write(
+        dir.path().join("typo.keynot"),
+        "---\ntitle: T\ntranstion: fade\n---\n# Still plays\n",
+    )
+    .unwrap();
+    let term = FakeTerminal::spawn(dir.path(), &["play", "typo.keynot"], false);
+    term.wait_for(b"Still plays", "the slide despite the unknown key");
+    term.quit();
+}
+
+#[test]
 fn quitting_restores_the_terminal() {
     let dir = tempfile::tempdir().unwrap();
     write_deck(dir.path());

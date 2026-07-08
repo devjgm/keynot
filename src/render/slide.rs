@@ -1,7 +1,7 @@
 //! Turns a parsed [`Slide`] into styled ratatui text.
 
 use super::highlight::Highlighter;
-use super::wrap::{spans_width, wrap_spans};
+use super::wrap::{spans_width, split_spans_at, wrap_spans};
 use crate::markdown::{Block, InlineSpan, ListBlock, Slide};
 use crate::theme::Theme;
 use ratatui::style::{Modifier, Style};
@@ -33,11 +33,26 @@ pub struct ImagePlacement {
     pub height: u16,
 }
 
-/// A rendered slide: styled text plus the image areas reserved in it.
+/// One column's placement within rendered slide text: its horizontal
+/// extent and which rows it can highlight. Single-column slides have
+/// exactly one span covering the full width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnSpan {
+    /// Left edge in cells, relative to the slide text area.
+    pub x: usize,
+    pub width: usize,
+    /// Rows (indices into the slide text) where this column has visible
+    /// content: the domain of the speaker's line highlight.
+    pub non_blank: Vec<usize>,
+}
+
+/// A rendered slide: styled text plus the image areas reserved in it
+/// and the column geometry the player's highlight cursor navigates.
 #[derive(Debug, Clone)]
 pub struct RenderedSlide {
     pub text: Text<'static>,
     pub images: Vec<ImagePlacement>,
+    pub columns: Vec<ColumnSpan>,
 }
 
 /// The gap between columns of a multi-column slide, in cells.
@@ -54,9 +69,15 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
         let empty = Vec::new();
         let blocks = slide.columns.first().unwrap_or(&empty);
         let (lines, images) = render_column(blocks, ctx, width);
+        let columns = vec![ColumnSpan {
+            x: 0,
+            width,
+            non_blank: non_blank_rows(&lines),
+        }];
         return RenderedSlide {
             text: Text::from(lines),
             images,
+            columns,
         };
     }
 
@@ -66,6 +87,7 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
 
     let mut rendered: Vec<(Vec<Line>, usize)> = Vec::with_capacity(n);
     let mut images = Vec::new();
+    let mut columns = Vec::with_capacity(n);
     let mut x_offset = 0usize;
     for (i, blocks) in slide.columns.iter().enumerate() {
         let col_width = if i == n - 1 { last_width } else { base_width };
@@ -74,6 +96,11 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
             placement.x += x_offset as u16;
         }
         images.extend(placements);
+        columns.push(ColumnSpan {
+            x: x_offset,
+            width: col_width,
+            non_blank: non_blank_rows(&lines),
+        });
         rendered.push((lines, col_width));
         x_offset += col_width + COLUMN_GUTTER;
     }
@@ -125,7 +152,20 @@ pub fn render_slide(slide: &Slide, ctx: &RenderContext, width: usize) -> Rendere
     RenderedSlide {
         text: Text::from(joined),
         images,
+        columns,
     }
+}
+
+/// Rows where a column has visible content (its trimmed lines are
+/// top-aligned, so a row index within the column is a row index in the
+/// joined slide text).
+fn non_blank_rows(lines: &[Line<'static>]) -> Vec<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.width() > 0)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Render one column of blocks at `width`, returning its lines (trailing
@@ -164,15 +204,6 @@ fn trim_trailing_blanks(lines: &mut Vec<Line<'static>>) {
     while lines.last().is_some_and(|l| l.width() == 0) {
         lines.pop();
     }
-}
-
-fn render_blocks(
-    blocks: &[Block],
-    ctx: &RenderContext,
-    width: usize,
-    out: &mut Vec<Line<'static>>,
-) {
-    render_blocks_spaced(blocks, ctx, width, out, true, None);
 }
 
 /// Render blocks, optionally separated by blank lines. List items render
@@ -350,7 +381,14 @@ fn render_code(
 fn render_quote(inner: &[Block], ctx: &RenderContext, width: usize, out: &mut Vec<Line<'static>>) {
     let bar = Span::styled("| ", Style::default().fg(ctx.theme.blockquote));
     let mut lines = Vec::new();
-    render_blocks(inner, ctx, width.saturating_sub(2).max(1), &mut lines);
+    render_blocks_spaced(
+        inner,
+        ctx,
+        width.saturating_sub(2).max(1),
+        &mut lines,
+        true,
+        None,
+    );
     trim_trailing_blanks(&mut lines);
     for line in lines {
         let styled = Line::from(
@@ -425,30 +463,10 @@ fn clip_line(line: Line<'static>, width: usize) -> Line<'static> {
     if line.width() <= width {
         return line;
     }
-    let mut spans = Vec::new();
-    let mut used = 0;
-    for span in line.spans {
-        let w = span.width();
-        if used + w <= width {
-            used += w;
-            spans.push(span);
-            continue;
-        }
-        let mut text = String::new();
-        for ch in span.content.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + cw > width {
-                break;
-            }
-            used += cw;
-            text.push(ch);
-        }
-        if !text.is_empty() {
-            spans.push(Span::styled(text, span.style));
-        }
-        break;
-    }
-    Line::from(spans)
+    let style = line.style;
+    let mut clipped = Line::from(split_spans_at(line.spans, width).0);
+    clipped.style = style;
+    clipped
 }
 
 #[cfg(test)]
@@ -692,6 +710,42 @@ mod tests {
         // trailing trim must not eat it.
         let last = row.spans.last().unwrap();
         assert_eq!(last.style.bg, Some(code_bg), "styled padding kept: {row:?}");
+    }
+
+    #[test]
+    fn single_column_span_covers_the_full_width() {
+        let rendered = render_cols(&["hello\n\nworld"], 40);
+        assert_eq!(rendered.columns.len(), 1);
+        let span = &rendered.columns[0];
+        assert_eq!((span.x, span.width), (0, 40));
+        assert_eq!(span.non_blank, vec![0, 2]);
+    }
+
+    #[test]
+    fn column_spans_carry_offsets_and_rows() {
+        // width 23: two 10-wide columns, gutter 3.
+        let rendered = render_cols(&["a1\n\na2", "b1"], 23);
+        let spans = &rendered.columns;
+        assert_eq!(spans.len(), 2);
+        assert_eq!((spans[0].x, spans[0].width), (0, 10));
+        assert_eq!((spans[1].x, spans[1].width), (13, 10));
+        assert_eq!(spans[0].non_blank, vec![0, 2]);
+        assert_eq!(spans[1].non_blank, vec![0]);
+    }
+
+    #[test]
+    fn image_only_column_has_no_highlightable_rows() {
+        let theme = Theme::dark();
+        let slide = Slide::parse_columns(&["text".to_string(), "![c](c.png)".to_string()]);
+        let sizer = |_: &str| Some((4u16, 3u16));
+        let ctx = RenderContext {
+            theme: &theme,
+            highlighter: highlighter(),
+            image_sizer: Some(&sizer),
+        };
+        let rendered = render_slide(&slide, &ctx, 23);
+        assert!(rendered.columns[1].non_blank.is_empty());
+        assert!(!rendered.columns[0].non_blank.is_empty());
     }
 
     #[test]
