@@ -29,6 +29,9 @@ Force a line break<br>with the br tag.
 > A blockquote renders italic behind a bar.
 > > And they nest.
 
+> [!TIP]
+> GFM alerts get a colored, labeled bar.
+
 ***
 
 That rule above is from `***`, since `---` separates slides.
@@ -104,6 +107,20 @@ alignment markers:
 | columns    | center  | split slides with pipes  |
 | gradients  | center  | backgrounds can fade     |
 | tables     | center  | you are looking at one   |
+
+---
+
+## Definitions and footnotes
+
+Definition lists pair bold terms with indented meanings:
+
+keynot
+: A terminal slide show, one markdown file at a time.
+
+And claims can carry footnotes[^1] that collect below[^2].
+
+[^1]: Numbered in the order they are referenced.
+[^2]: At the end of the slide, or of their column.
 
 ---
 

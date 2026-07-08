@@ -25,7 +25,8 @@ pub use metadata::{
     KNOWN_COLOR_KEYS, KNOWN_KEYS, Metadata, Transition,
 };
 pub use slide::{
-    Block, InlineSpan, InlineStyle, ListBlock, ListItem, Slide, TableAlign, TableBlock,
+    AlertKind, Block, DefinitionItem, Footnote, InlineSpan, InlineStyle, ListBlock, ListItem,
+    Slide, TableAlign, TableBlock,
 };
 
 /// A fully parsed presentation.

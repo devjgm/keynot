@@ -45,6 +45,7 @@ cargo install --locked keynot
 keynot new talk.keynot     # write a skeleton presentation
 keynot play talk.keynot    # present it
 keynot check talk.keynot   # validate and summarize a file
+keynot play README.md      # any markdown file mostly just works
 ```
 
 Useful `play` flags:

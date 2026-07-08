@@ -31,7 +31,12 @@ pub enum Block {
         language: Option<String>,
         code: String,
     },
-    BlockQuote(Vec<Block>),
+    BlockQuote {
+        /// `Some` for GFM alerts (`> [!NOTE]` and friends), which render
+        /// with a labeled, colored bar instead of the plain quote style.
+        kind: Option<AlertKind>,
+        blocks: Vec<Block>,
+    },
     /// An image that was alone in its paragraph; `source` is the URL or
     /// path exactly as written. Images mixed into text stay inline.
     Image {
@@ -39,7 +44,49 @@ pub enum Block {
         alt: String,
     },
     Table(TableBlock),
+    /// `Term` / `: definition` pairs (the definition-list extension).
+    DefinitionList(Vec<DefinitionItem>),
+    /// Footnote definitions, synthesized at the end of a column that
+    /// referenced any (`[^1]` markers point here).
+    Footnotes(Vec<Footnote>),
     Rule,
+}
+
+/// One term and its (possibly several) definitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionItem {
+    pub term: Vec<InlineSpan>,
+    pub definitions: Vec<Vec<Block>>,
+}
+
+/// One footnote: its number (assigned in reference order) and body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Footnote {
+    pub number: usize,
+    pub blocks: Vec<Block>,
+}
+
+/// The GFM alert flavors (`> [!NOTE]` etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl AlertKind {
+    /// The label shown on the alert's first line.
+    pub fn label(self) -> &'static str {
+        match self {
+            AlertKind::Note => "Note",
+            AlertKind::Tip => "Tip",
+            AlertKind::Important => "Important",
+            AlertKind::Warning => "Warning",
+            AlertKind::Caution => "Caution",
+        }
+    }
 }
 
 /// A GFM table. Cells are inline-only (GFM allows no block content in
@@ -93,6 +140,8 @@ pub struct InlineSpan {
 /// Inline style flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct InlineStyle {
+    /// A footnote reference marker like `[1]`, drawn in the accent.
+    pub footnote_ref: bool,
     pub bold: bool,
     pub italic: bool,
     pub strikethrough: bool,
@@ -120,8 +169,13 @@ impl Slide {
     pub fn parse_columns(columns: &[String]) -> Self {
         let mut slide = Slide::default();
         for source in columns {
-            let options =
-                Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES;
+            let options = Options::ENABLE_STRIKETHROUGH
+                | Options::ENABLE_TASKLISTS
+                | Options::ENABLE_TABLES
+                | Options::ENABLE_HEADING_ATTRIBUTES
+                | Options::ENABLE_GFM
+                | Options::ENABLE_DEFINITION_LIST
+                | Options::ENABLE_FOOTNOTES;
             let parser = Parser::new_ext(source, options);
             let mut builder = SlideBuilder::default();
             for event in parser {
@@ -159,7 +213,13 @@ struct ParsedColumn {
 /// Open container blocks while walking parser events.
 #[derive(Debug)]
 enum Container {
-    Quote(Vec<Block>),
+    Quote(Option<AlertKind>, Vec<Block>),
+    DefinitionList(Vec<DefinitionItem>),
+    Definition(Vec<Block>),
+    Footnote {
+        number: usize,
+        blocks: Vec<Block>,
+    },
     Table {
         table: TableBlock,
         /// Cells collect into the header until the head section ends.
@@ -186,6 +246,9 @@ struct SlideBuilder {
     html: Option<String>,
     /// `Some((start_index, url))` while inside an image.
     image: Option<(usize, String)>,
+    /// Footnote numbers by name, assigned in order of first sighting.
+    footnote_numbers: std::collections::HashMap<String, usize>,
+    footnotes: Vec<Footnote>,
 }
 
 impl SlideBuilder {
@@ -214,6 +277,12 @@ impl SlideBuilder {
                     *task = Some(checked);
                 }
             }
+            Event::FootnoteReference(name) => {
+                let number = self.footnote_number(&name);
+                let mut style = self.style;
+                style.footnote_ref = true;
+                self.push_span(&format!("[{number}]"), style);
+            }
             Event::InlineHtml(html) => self.inline_html(&html),
             Event::Html(html) => {
                 if let Some(buf) = &mut self.html {
@@ -230,9 +299,16 @@ impl SlideBuilder {
     fn start(&mut self, tag: Tag) {
         match tag {
             Tag::Paragraph | Tag::Heading { .. } => self.flush_inline(),
-            Tag::BlockQuote(_) => {
+            Tag::BlockQuote(kind) => {
                 self.flush_inline();
-                self.containers.push(Container::Quote(Vec::new()));
+                let kind = kind.map(|k| match k {
+                    pulldown_cmark::BlockQuoteKind::Note => AlertKind::Note,
+                    pulldown_cmark::BlockQuoteKind::Tip => AlertKind::Tip,
+                    pulldown_cmark::BlockQuoteKind::Important => AlertKind::Important,
+                    pulldown_cmark::BlockQuoteKind::Warning => AlertKind::Warning,
+                    pulldown_cmark::BlockQuoteKind::Caution => AlertKind::Caution,
+                });
+                self.containers.push(Container::Quote(kind, Vec::new()));
             }
             Tag::List(start) => {
                 // A nested list may start while the parent (tight) item's
@@ -287,6 +363,22 @@ impl SlideBuilder {
                 };
                 self.code = Some((language, String::new()));
             }
+            Tag::DefinitionList => {
+                self.flush_inline();
+                self.containers.push(Container::DefinitionList(Vec::new()));
+            }
+            Tag::DefinitionListTitle => self.flush_inline(),
+            Tag::DefinitionListDefinition => {
+                self.containers.push(Container::Definition(Vec::new()));
+            }
+            Tag::FootnoteDefinition(name) => {
+                self.flush_inline();
+                let number = self.footnote_number(&name);
+                self.containers.push(Container::Footnote {
+                    number,
+                    blocks: Vec::new(),
+                });
+            }
             Tag::HtmlBlock => self.html = Some(String::new()),
             Tag::Emphasis => self.style.italic = true,
             Tag::Strong => self.style.bold = true,
@@ -325,8 +417,8 @@ impl SlideBuilder {
             }
             TagEnd::BlockQuote(_) => {
                 self.flush_inline();
-                if let Some(Container::Quote(blocks)) = self.containers.pop() {
-                    self.push_block(Block::BlockQuote(blocks));
+                if let Some(Container::Quote(kind, blocks)) = self.containers.pop() {
+                    self.push_block(Block::BlockQuote { kind, blocks });
                 }
             }
             TagEnd::List(_) => {
@@ -340,6 +432,35 @@ impl SlideBuilder {
                     && let Some(Container::List(list)) = self.containers.last_mut()
                 {
                     list.items.push(ListItem { blocks, task });
+                }
+            }
+            TagEnd::DefinitionList => {
+                if let Some(Container::DefinitionList(items)) = self.containers.pop() {
+                    self.push_block(Block::DefinitionList(items));
+                }
+            }
+            TagEnd::DefinitionListTitle => {
+                let term = self.take_inline();
+                if let Some(Container::DefinitionList(items)) = self.containers.last_mut() {
+                    items.push(DefinitionItem {
+                        term,
+                        definitions: Vec::new(),
+                    });
+                }
+            }
+            TagEnd::DefinitionListDefinition => {
+                self.flush_inline();
+                if let Some(Container::Definition(blocks)) = self.containers.pop()
+                    && let Some(Container::DefinitionList(items)) = self.containers.last_mut()
+                    && let Some(item) = items.last_mut()
+                {
+                    item.definitions.push(blocks);
+                }
+            }
+            TagEnd::FootnoteDefinition => {
+                self.flush_inline();
+                if let Some(Container::Footnote { number, blocks }) = self.containers.pop() {
+                    self.footnotes.push(Footnote { number, blocks });
                 }
             }
             TagEnd::Table => {
@@ -461,20 +582,37 @@ impl SlideBuilder {
 
     fn push_block(&mut self, block: Block) {
         match self.containers.last_mut() {
-            Some(Container::Quote(blocks)) | Some(Container::Item { blocks, .. }) => {
+            Some(Container::Quote(_, blocks))
+            | Some(Container::Item { blocks, .. })
+            | Some(Container::Definition(blocks))
+            | Some(Container::Footnote { blocks, .. }) => {
                 blocks.push(block);
             }
             // A block can never be a direct child of a list, and GFM
             // table cells hold no blocks; defensively treat such a block
             // as a sibling instead of dropping it.
-            Some(Container::List(_)) | Some(Container::Table { .. }) | None => {
-                self.blocks.push(block)
-            }
+            Some(Container::List(_))
+            | Some(Container::Table { .. })
+            | Some(Container::DefinitionList(_))
+            | None => self.blocks.push(block),
         }
+    }
+
+    /// The stable number for footnote `name`, assigned on first sight.
+    fn footnote_number(&mut self, name: &str) -> usize {
+        let next = self.footnote_numbers.len() + 1;
+        *self
+            .footnote_numbers
+            .entry(name.to_string())
+            .or_insert(next)
     }
 
     fn finish(mut self) -> ParsedColumn {
         self.flush_inline();
+        if !self.footnotes.is_empty() {
+            self.footnotes.sort_by_key(|f| f.number);
+            self.blocks.push(Block::Footnotes(self.footnotes));
+        }
         ParsedColumn {
             blocks: self.blocks,
             notes: self.notes,
@@ -701,7 +839,7 @@ mod tests {
     #[test]
     fn parses_blockquote() {
         let slide = Slide::parse("> quoted text\n");
-        let Block::BlockQuote(inner) = &slide.columns[0][0] else {
+        let Block::BlockQuote { blocks: inner, .. } = &slide.columns[0][0] else {
             panic!()
         };
         let Block::Paragraph(spans) = &inner[0] else {
@@ -713,10 +851,10 @@ mod tests {
     #[test]
     fn parses_nested_blockquote() {
         let slide = Slide::parse("> outer\n>\n> > inner\n");
-        let Block::BlockQuote(outer) = &slide.columns[0][0] else {
+        let Block::BlockQuote { blocks: outer, .. } = &slide.columns[0][0] else {
             panic!()
         };
-        assert!(outer.iter().any(|b| matches!(b, Block::BlockQuote(_))));
+        assert!(outer.iter().any(|b| matches!(b, Block::BlockQuote { .. })));
     }
 
     #[test]
@@ -887,6 +1025,73 @@ mod tests {
     }
 
     #[test]
+    fn heading_attributes_are_stripped() {
+        let slide = Slide::parse("# Title {#custom-id .cls}\n");
+        let Block::Heading { content, .. } = &slide.columns[0][0] else {
+            panic!("expected heading");
+        };
+        assert_eq!(text_of(content), "Title");
+    }
+
+    #[test]
+    fn gfm_alerts_parse_with_their_kind() {
+        let slide = Slide::parse("> [!WARNING]\n> mind the gap\n");
+        let Block::BlockQuote { kind, blocks } = &slide.columns[0][0] else {
+            panic!("expected quote");
+        };
+        assert_eq!(*kind, Some(AlertKind::Warning));
+        let Block::Paragraph(spans) = &blocks[0] else {
+            panic!("expected paragraph body");
+        };
+        assert_eq!(text_of(spans), "mind the gap");
+    }
+
+    #[test]
+    fn plain_quotes_have_no_alert_kind() {
+        let slide = Slide::parse("> just quoting\n");
+        let Block::BlockQuote { kind, .. } = &slide.columns[0][0] else {
+            panic!("expected quote");
+        };
+        assert_eq!(*kind, None);
+    }
+
+    #[test]
+    fn definition_lists_parse_terms_and_definitions() {
+        let slide = Slide::parse("Term\n: first def\n: second def\n");
+        let Block::DefinitionList(items) = &slide.columns[0][0] else {
+            panic!("expected definition list, got {:?}", slide.columns[0]);
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(text_of(&items[0].term), "Term");
+        assert_eq!(items[0].definitions.len(), 2);
+    }
+
+    #[test]
+    fn footnotes_number_in_reference_order() {
+        let slide = Slide::parse("See[^b] and[^a].\n\n[^a]: note a\n[^b]: note b\n");
+        // References numbered by first sighting: b=1, a=2; the section
+        // is appended at the end, sorted by number.
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        let markers: Vec<&str> = spans
+            .iter()
+            .filter(|s| s.style.footnote_ref)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(markers, vec!["[1]", "[2]"]);
+        let Block::Footnotes(notes) = slide.columns[0].last().unwrap() else {
+            panic!("expected footnote section");
+        };
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].number, 1);
+        let Block::Paragraph(body) = &notes[0].blocks[0] else {
+            panic!("note body");
+        };
+        assert_eq!(text_of(body), "note b");
+    }
+
+    #[test]
     fn tables_parse_with_alignment_and_cells() {
         let slide = Slide::parse("| name | age |\n|:-----|----:|\n| ada | 36 |\n| bob | 40 |\n");
         let Block::Table(table) = &slide.columns[0][0] else {
@@ -931,10 +1136,12 @@ mod tests {
                 Block::Paragraph(_) => "para",
                 Block::List(_) => "list",
                 Block::CodeBlock { .. } => "code",
-                Block::BlockQuote(_) => "quote",
+                Block::BlockQuote { .. } => "quote",
                 Block::Image { .. } => "image",
                 Block::Rule => "rule",
                 Block::Table(_) => "table",
+                Block::DefinitionList(_) => "definitions",
+                Block::Footnotes(_) => "footnotes",
             })
             .collect();
         assert_eq!(kinds, vec!["heading", "para", "list", "code", "quote"]);

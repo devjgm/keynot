@@ -2,7 +2,10 @@
 
 use super::highlight::Highlighter;
 use super::wrap::{spans_width, split_spans_at, wrap_spans};
-use crate::markdown::{Block, InlineSpan, ListBlock, Slide, TableAlign, TableBlock};
+use crate::markdown::{
+    AlertKind, Block, DefinitionItem, Footnote, InlineSpan, ListBlock, Slide, TableAlign,
+    TableBlock,
+};
 use crate::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -376,6 +379,79 @@ fn render_table(
     ));
 }
 
+/// Definition lists: bold terms with their definitions indented below.
+fn render_definitions(
+    items: &[DefinitionItem],
+    ctx: &RenderContext,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    for (i, item) in items.iter().enumerate() {
+        if i > 0 {
+            out.push(Line::raw(""));
+        }
+        let term: Vec<Span<'static>> = convert_inline(&item.term, ctx.theme)
+            .into_iter()
+            .map(|mut s| {
+                s.style = s.style.add_modifier(Modifier::BOLD);
+                s
+            })
+            .collect();
+        out.extend(wrap_spans(term, width));
+        for definition in &item.definitions {
+            let mut lines = Vec::new();
+            render_blocks_spaced(
+                definition,
+                ctx,
+                width.saturating_sub(2).max(1),
+                &mut lines,
+                true,
+                None,
+            );
+            trim_trailing_blanks(&mut lines);
+            for line in lines {
+                out.push(prefix_line(Span::raw("  "), line));
+            }
+        }
+    }
+}
+
+/// The footnote section a column ends with when it referenced any:
+/// a short dim rule, then each note behind its accent `[n]` marker.
+fn render_footnotes(
+    footnotes: &[Footnote],
+    ctx: &RenderContext,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    out.push(Line::styled(
+        "\u{2500}".repeat(width.min(12)),
+        Style::default().fg(ctx.theme.code_border),
+    ));
+    for footnote in footnotes {
+        let marker = format!("[{}] ", footnote.number);
+        let indent = marker.width();
+        let mut lines = Vec::new();
+        render_blocks_spaced(
+            &footnote.blocks,
+            ctx,
+            width.saturating_sub(indent).max(1),
+            &mut lines,
+            true,
+            None,
+        );
+        trim_trailing_blanks(&mut lines);
+        for (i, line) in lines.into_iter().enumerate() {
+            let prefix = if i == 0 {
+                Span::styled(marker.clone(), Style::default().fg(ctx.theme.accent))
+            } else {
+                Span::raw(" ".repeat(indent))
+            };
+            out.push(prefix_line(prefix, line));
+        }
+    }
+}
+
 /// Render blocks, optionally separated by blank lines. List items render
 /// tight (no separators) so nested lists hug their parent item.
 /// `images` is `Some` only at the top level: nested blocks (quotes, list
@@ -399,11 +475,13 @@ fn render_blocks_spaced(
             Block::CodeBlock { language, code } => {
                 render_code(language.as_deref(), code, ctx, width, out);
             }
-            Block::BlockQuote(inner) => render_quote(inner, ctx, width, out),
+            Block::BlockQuote { kind, blocks } => render_quote(*kind, blocks, ctx, width, out),
             Block::Image { source, alt } => {
                 render_image(source, alt, ctx, width, out, images.as_deref_mut());
             }
             Block::Table(table) => render_table(table, ctx, width, out),
+            Block::DefinitionList(items) => render_definitions(items, ctx, width, out),
+            Block::Footnotes(footnotes) => render_footnotes(footnotes, ctx, width, out),
             Block::Rule => {
                 out.push(Line::styled(
                     "-".repeat(width),
@@ -621,8 +699,35 @@ fn render_code(
     out.push(Line::from(bottom));
 }
 
-fn render_quote(inner: &[Block], ctx: &RenderContext, width: usize, out: &mut Vec<Line<'static>>) {
-    let bar = Span::styled("| ", Style::default().fg(ctx.theme.blockquote));
+/// Plain quotes: italic behind a `|` bar. GFM alerts (`> [!NOTE]`)
+/// get a colored bar and a bold label line instead, and their body
+/// stays upright -- callouts are information, not quotation.
+fn render_quote(
+    kind: Option<AlertKind>,
+    inner: &[Block],
+    ctx: &RenderContext,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+) {
+    let color = match kind {
+        None => ctx.theme.blockquote,
+        Some(AlertKind::Note) => ctx.theme.link,
+        Some(AlertKind::Tip) => ctx.theme.blockquote,
+        Some(AlertKind::Important) => ctx.theme.heading,
+        Some(AlertKind::Warning) => ctx.theme.accent,
+        // No theme slot means "danger"; the terminal's red does.
+        Some(AlertKind::Caution) => Color::LightRed,
+    };
+    let bar = Span::styled("| ", Style::default().fg(color));
+    if let Some(kind) = kind {
+        out.push(Line::from(vec![
+            bar.clone(),
+            Span::styled(
+                kind.label().to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
     let mut lines = Vec::new();
     render_blocks_spaced(
         inner,
@@ -634,12 +739,16 @@ fn render_quote(inner: &[Block], ctx: &RenderContext, width: usize, out: &mut Ve
     );
     trim_trailing_blanks(&mut lines);
     for line in lines {
-        let styled = Line::from(
-            line.spans
-                .into_iter()
-                .map(|s| s.patch_style(Style::default().add_modifier(Modifier::ITALIC)))
-                .collect::<Vec<_>>(),
-        );
+        let styled = if kind.is_some() {
+            line
+        } else {
+            Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|s| s.patch_style(Style::default().add_modifier(Modifier::ITALIC)))
+                    .collect::<Vec<_>>(),
+            )
+        };
         out.push(prefix_line(bar.clone(), styled));
     }
 }
@@ -651,6 +760,9 @@ pub fn convert_inline(spans: &[InlineSpan], theme: &Theme) -> Vec<Span<'static>>
         let mut style = Style::default().fg(theme.text);
         if span.style.code {
             style = style.fg(theme.accent).bg(theme.code_background);
+        }
+        if span.style.footnote_ref {
+            style = style.fg(theme.accent);
         }
         if span.link.is_some() {
             style = style.fg(theme.link).add_modifier(Modifier::UNDERLINED);
@@ -1122,6 +1234,59 @@ mod tests {
     fn single_column_image_is_centered() {
         let rendered = render_with_images("![c](c.png)", 40, (10, 4));
         assert_eq!(rendered.images[0].x, 15, "(40 - 10) / 2");
+    }
+
+    #[test]
+    fn definition_lists_render_bold_terms_and_indented_defs() {
+        let text = render("Term\n: the meaning\n", 40);
+        let rows: Vec<String> = text.lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(rows, vec!["Term", "  the meaning"]);
+        let term = &text.lines[0].spans[0];
+        assert!(term.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn footnotes_render_markers_and_a_trailing_section() {
+        let text = render("Fact[^1].\n\n[^1]: source here\n", 40);
+        let rows: Vec<String> = text.lines.iter().map(|l| l.to_string()).collect();
+        assert!(rows[0].contains("Fact[1]."), "{rows:?}");
+        assert!(rows.last().unwrap().contains("[1] source here"));
+        // The marker and section label take the accent color.
+        let accent = Theme::dark().accent;
+        let marker_span = text.lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("[1]"))
+            .unwrap();
+        assert_eq!(marker_span.style.fg, Some(accent));
+    }
+
+    #[test]
+    fn alerts_render_a_labeled_colored_bar() {
+        let text = render("> [!NOTE]\n> useful context\n", 40);
+        let rows: Vec<String> = text.lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(rows[0], "| Note");
+        assert_eq!(rows[1], "| useful context");
+        let label = text.lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Note"))
+            .unwrap();
+        assert_eq!(label.style.fg, Some(Theme::dark().link), "Note is blue");
+        assert!(label.style.add_modifier.contains(Modifier::BOLD));
+        // Alert bodies stay upright, unlike quotes.
+        let body = text.lines[1]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("useful"))
+            .unwrap();
+        assert!(!body.style.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn plain_quotes_stay_italic_and_unlabeled() {
+        let text = render("> wisdom\n", 40);
+        assert_eq!(text.lines[0].to_string(), "| wisdom");
     }
 
     #[test]

@@ -23,7 +23,13 @@ const HELP_STYLES: Styles = Styles::styled()
 ///     keynot play my-talk.keynot
 ///
 #[derive(Parser)]
-#[command(name = "keynot", version, verbatim_doc_comment, styles = HELP_STYLES)]
+#[command(
+    name = "keynot",
+    version,
+    verbatim_doc_comment,
+    styles = HELP_STYLES,
+    after_help = "Docs and releases: https://crates.io/crates/keynot"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

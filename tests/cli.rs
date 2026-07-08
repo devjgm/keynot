@@ -38,9 +38,9 @@ Play it with: keynot play [..]demo-talk.keynot
   title:  demo talk
   author: Your Name
   theme:  dark
-  slides: 6
+  slides: 7
   notes:  1
-  tallest: slide 2, 14 lines (at 80 columns)
+  tallest: slide 2, 18 lines (at 80 columns)
 
 "#]]);
 }
@@ -362,6 +362,8 @@ Options:
 
   -V, --version
           Print version
+
+Docs and releases: https://crates.io/crates/keynot
 
 "#]]);
 }

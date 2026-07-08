@@ -346,12 +346,31 @@ the widest columns shrink and their cells word-wrap, with a small
 minimum width per column. Cells are inline-only, per GFM: styles,
 inline code, and links work inside them, but not lists or code blocks.
 
-### Blockquotes
+### Blockquotes and alerts
 
 ```markdown
 > Quoted text renders italic behind a colored bar.
 > > Quotes can nest.
+
+> [!TIP]
+> GFM alerts get a colored, labeled bar and an upright body.
 ```
+
+The alert kinds are `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
+and `[!CAUTION]`, each with its own bar color.
+
+### Definition lists
+
+```markdown
+Term
+: Its definition, bold term above, indented body below.
+```
+
+### Footnotes
+
+`Some claim[^1]` renders an accent `[1]` marker, and the note bodies
+(`[^1]: ...`) collect at the end of their slide (or `|||` column)
+behind a short rule, numbered in reference order.
 
 ### Horizontal rules
 
@@ -385,7 +404,7 @@ placeholder appears when the file cannot be read.
 
 ### Not supported (yet)
 
-Footnotes and math render as plain text. Raw HTML
+Math renders as plain text. Raw HTML
 other than `<u>`, `<br>`, and comments is ignored (its text content still
 renders).
 
