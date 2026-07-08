@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-08
+
 ### Added
 
 - Dynamic shell completions: register once (one line, or a drop-in
@@ -130,7 +132,8 @@ kitty/iTerm2/sixel/half-blocks, from files or URLs; slide transitions;
 a speaker line highlight; an outline view with number jumping; a shell
 escape; and live reload.
 
-[Unreleased]: https://github.com/devjgm/keynot/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/devjgm/keynot/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/devjgm/keynot/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/devjgm/keynot/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/devjgm/keynot/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/devjgm/keynot/releases/tag/v0.1.0
