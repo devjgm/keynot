@@ -373,4 +373,11 @@ fn quitting_restores_the_terminal() {
         "leaves the alternate screen"
     );
     assert!(contains(&out, b"\x1b[?25h"), "shows the cursor again");
+
+    // Every frame is wrapped in synchronized-output escapes, in
+    // balanced begin/end pairs.
+    let count = |needle: &[u8]| out.windows(needle.len()).filter(|w| *w == needle).count();
+    let begins = count(b"\x1b[?2026h");
+    assert!(begins > 0, "synchronized output in use");
+    assert_eq!(begins, count(b"\x1b[?2026l"), "balanced begin/end");
 }

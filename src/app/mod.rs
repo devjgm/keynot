@@ -11,6 +11,7 @@ use crate::render::{
 use crate::theme::{Background, Theme};
 use config::TransitionEffects;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use eyre::{Result, WrapErr, bail};
 use images::Images;
 use ratatui::Frame;
@@ -121,6 +122,12 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     let _ = terminal.show_cursor();
     ratatui::restore();
     result
+}
+
+/// The region slide transitions animate: the whole screen except the
+/// footer row, which is chrome and stays put.
+fn transition_area(area: Rect) -> Rect {
+    Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
 }
 
 /// The area available to slide content within a terminal of `area`'s
@@ -332,7 +339,14 @@ impl App {
             self.adopt_pending_images();
             let elapsed = self.last_frame.elapsed();
             self.last_frame = Instant::now();
-            terminal.draw(|frame| self.draw(frame, elapsed))?;
+            // Synchronized output (mode 2026): the terminal composes
+            // each frame atomically, so big-diff frames (transitions
+            // repaint everything) cannot tear. Unsupporting terminals
+            // ignore the escapes.
+            crossterm::execute!(std::io::stdout(), BeginSynchronizedUpdate)?;
+            let drawn = terminal.draw(|frame| self.draw(frame, elapsed));
+            crossterm::execute!(std::io::stdout(), EndSynchronizedUpdate)?;
+            drawn?;
             let timeout = if self.effect.is_some() || self.outgoing.is_some() {
                 Duration::from_millis(16)
             } else if self.pending_images.is_some() {
@@ -593,6 +607,11 @@ impl App {
                     self.effect = self.transition().enter(&self.theme, forward);
                 }
             }
+            // The idle loop only wakes every 500ms, so time-since-last-
+            // frame at this keypress can exceed the whole transition;
+            // charging that to the effect's first frame would skip the
+            // animation entirely. Start the clock now instead.
+            self.last_frame = Instant::now();
         }
     }
 
@@ -802,8 +821,12 @@ impl App {
             frame.render_widget(&cache.paragraph, slide_area);
         }
 
+        // Transitions animate everything above the footer, not just the
+        // slide's (vertically centered) text block: a push that only
+        // moved the middle band of the screen looked broken.
+        let effect_area = transition_area(frame.area());
         if let Some((_, effect)) = &mut self.outgoing {
-            frame.render_effect(effect, slide_area, elapsed.into());
+            frame.render_effect(effect, effect_area, elapsed.into());
             if effect.done() {
                 self.outgoing = None;
                 self.effect = self.pending_enter.take();
@@ -813,7 +836,7 @@ impl App {
                 self.highlight = None;
             }
         } else if let Some(effect) = &mut self.effect {
-            frame.render_effect(effect, slide_area, elapsed.into());
+            frame.render_effect(effect, effect_area, elapsed.into());
             if effect.done() {
                 self.effect = None;
             }
@@ -1594,7 +1617,49 @@ mod tests {
         assert_eq!(content_area(Rect::new(0, 0, 60, 2)), None, "too short");
     }
 
-    /// A deck of 20 one-line paragraphs: ~40 rendered rows.
+    #[test]
+    fn transitions_cover_the_screen_minus_the_footer() {
+        let area = Rect::new(0, 0, 100, 30);
+        assert_eq!(transition_area(area), Rect::new(0, 0, 100, 29));
+    }
+
+    #[test]
+    fn transition_wipe_covers_the_whole_screen() {
+        // tachyonfx's push is a directional wipe with a soft gradient
+        // edge. Mid-wipe, that edge must appear across the screen's
+        // rows -- with the old text-block-sized effect area it only
+        // touched the middle band, which looked broken.
+        let mut app = test_app("---\ntransition: slide\n---\n# AAAA\n---\n# BBBB\n");
+        draw(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::Right);
+        let mid = buffer_text(&draw(&mut app, Duration::from_millis(40)));
+        let edge_rows = mid
+            .lines()
+            .filter(|l| l.chars().any(|c| ('\u{2588}'..='\u{258f}').contains(&c)))
+            .count();
+        assert!(
+            edge_rows > 10,
+            "the wipe edge spans the screen, not just the text band: {edge_rows} rows\n{mid}"
+        );
+    }
+
+    #[test]
+    fn changing_slides_resets_the_frame_clock() {
+        // Regression: idle polling meant up to 500ms of "elapsed" time
+        // was charged to a transition's first frame, often skipping the
+        // whole animation (coalesce lasts 300ms).
+        let mut app = test_app("# A\n---\n# B\n");
+        draw(&mut app, Duration::ZERO);
+        app.last_frame = Instant::now() - Duration::from_millis(450);
+        press(&mut app, KeyCode::Right);
+        assert!(
+            app.last_frame.elapsed() < Duration::from_millis(100),
+            "goto must restart the animation clock"
+        );
+        assert!(app.effect.is_some(), "the enter effect is armed");
+    }
+
+    /// A deck of 20 one-line paragraphs: ~40 rendered rows.    /// A deck of 20 one-line paragraphs: ~40 rendered rows.
     fn tall_deck() -> String {
         (1..=20).map(|i| format!("point{i}\n\n")).collect()
     }

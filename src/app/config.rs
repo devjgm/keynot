@@ -33,10 +33,12 @@ impl TransitionEffects for Transition {
                 timer,
             )),
             Transition::Sweep => {
+                // Forward sweeps arrive from the right, like the push:
+                // new content comes from the direction you are heading.
                 let motion = if forward {
-                    Motion::LeftToRight
-                } else {
                     Motion::RightToLeft
+                } else {
+                    Motion::LeftToRight
                 };
                 Some(fx::sweep_in(motion, 10, 0, theme.background.base(), timer))
             }

@@ -20,7 +20,9 @@ Mix **bold**, *italic*, ~~strikethrough~~, <u>underline</u>, and
 
 Links look like this: [ratatui](https://ratatui.rs).
 
-Force a line break<br>with the br tag.
+Force a line break<br>with the `<br>` tag.
+
+Emoji shortcodes work too: :crab: :rocket: :sparkles:
 
 |||
 

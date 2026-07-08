@@ -532,7 +532,10 @@ impl SlideBuilder {
     }
 
     fn push_text(&mut self, text: &str) {
-        self.push_span(text, self.style);
+        // Emoji shortcodes apply to prose only; inline code and code
+        // blocks keep their literal colons (they go through other paths).
+        let text = replace_emoji_shortcodes(text);
+        self.push_span(&text, self.style);
     }
 
     fn push_span(&mut self, text: &str, style: InlineStyle) {
@@ -629,6 +632,57 @@ fn heading_level(level: HeadingLevel) -> u8 {
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
     }
+}
+
+/// Replace `:shortcode:` sequences with their emoji (GitHub's emoji
+/// shortcodes, e.g. `:crab:` becomes a crab). Unknown names stay
+/// exactly as written, so times like `10:30:45` and casual colons are
+/// safe.
+fn replace_emoji_shortcodes(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(':') {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut changed = false;
+    while let Some(start) = rest.find(':') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        // A candidate name runs to the next colon and must look like a
+        // shortcode (GitHub names use ascii word characters, + and -).
+        match after.find(':') {
+            Some(end)
+                if !after[..end].is_empty()
+                    && after[..end]
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-')) =>
+            {
+                match emojis::get_by_shortcode(&after[..end]) {
+                    Some(emoji) => {
+                        out.push_str(emoji.as_str());
+                        changed = true;
+                        rest = &after[end + 1..];
+                    }
+                    None => {
+                        // Not a known name: emit the colon and rescan
+                        // from the name, whose end-colon may open a
+                        // real shortcode (e.g. `a:b :tada:`).
+                        out.push(':');
+                        rest = after;
+                    }
+                }
+            }
+            _ => {
+                out.push(':');
+                rest = after;
+            }
+        }
+    }
+    if !changed {
+        return text.into();
+    }
+    out.push_str(rest);
+    out.into()
 }
 
 /// The trimmed inner text of every HTML comment in `html`, in order.
@@ -1022,6 +1076,49 @@ mod tests {
     fn parse_is_a_single_column() {
         let slide = Slide::parse("hello");
         assert_eq!(slide.columns.len(), 1);
+    }
+
+    #[test]
+    fn emoji_shortcodes_replace_in_prose() {
+        let slide = Slide::parse("Ship it :rocket: with :crab:!\n");
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(text_of(spans), "Ship it \u{1f680} with \u{1f980}!");
+    }
+
+    #[test]
+    fn unknown_shortcodes_and_times_stay_literal() {
+        let slide = Slide::parse("At 10:30:45 :notathing: happens\n");
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(text_of(spans), "At 10:30:45 :notathing: happens");
+    }
+
+    #[test]
+    fn shortcodes_in_code_stay_literal() {
+        let slide = Slide::parse("Use `:rocket:` here\n\n```\n:crab:\n```\n");
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        assert!(spans.iter().any(|s| s.style.code && s.text == ":rocket:"));
+        let Block::CodeBlock { code, .. } = &slide.columns[0][1] else {
+            panic!("expected code block");
+        };
+        assert_eq!(code.trim(), ":crab:");
+    }
+
+    #[test]
+    fn adjacent_and_rescanned_shortcodes_work() {
+        // A failed candidate's closing colon can open the real one.
+        let slide = Slide::parse("a:b :tada: and :+1::crab:\n");
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        let text = text_of(spans);
+        assert!(text.starts_with("a:b \u{1f389}"), "{text:?}");
+        assert!(text.contains("\u{1f44d}\u{1f980}"), "{text:?}");
     }
 
     #[test]

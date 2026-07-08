@@ -18,6 +18,8 @@ semantic versioning.
 - Definition lists render bold terms with indented definitions.
 - Heading attributes (`{#id}`) parse and no longer show as literal
   braces.
+- Emoji shortcodes: `:crab:` and friends (GitHub's names) become real
+  emoji in prose; unknown names and anything in code stay literal.
 - `keynot --help` links to the crate page.
 - Overflowing slides scroll: on a slide taller than the terminal,
   walking the line highlight (down/up) moves the view to follow the
@@ -58,6 +60,18 @@ semantic versioning.
 
 ### Fixed
 
+- Frames draw inside synchronized-output escapes (mode 2026), so
+  transitions cannot tear in terminals that support it (kitty,
+  Ghostty, WezTerm, and friends); others ignore the escapes.
+- The sweep transition's direction flipped to match the push: moving
+  forward, new content arrives from the right.
+- Transitions animate the whole screen instead of only the slide
+  text's rows, which made the push and sweep effects look like a
+  broken middle band.
+- Transitions no longer skip randomly: the idle loop's wake interval
+  (up to 500ms) was charged to a new transition's first frame, which
+  often exceeded the whole animation. Advancing a slide now restarts
+  the animation clock.
 - Reloading with `r` no longer freezes the show while URL images
   re-fetch; decodes happen on a worker thread and the network is never
   touched from the draw path.

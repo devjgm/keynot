@@ -283,6 +283,7 @@ slide is centered vertically.
 | `` `inline code` ``          | accent color on code background |
 | `[text](https://url)`        | underlined text in link color, followed by the URL in dim parentheses |
 | `line one<br>line two`       | forced line break            |
+| `:crab:` / `:rocket:` / ...  | emoji, via GitHub's shortcode names (unknown names stay literal; code spans are never touched) |
 
 Styles nest: `***bold italic***`, ``**bold with `code`**``, and so on.
 Long lines wrap to the slide width at word boundaries.
