@@ -6,6 +6,24 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Press `s` during a show to peek at the current slide's speaker
+  notes in an overlay; any key closes it.
+
+### Changed
+
+- Code windows lost their traffic-light dots: just the rounded frame
+  and the language label now.
+
+### Fixed
+
+- An emoji shortcode at the start of a line (`:crab: A Ferris Talk`)
+  no longer parses as definition-list syntax, which ate the colon,
+  bolded the previous line as a "term", and indented the text. Known
+  shortcodes at line starts are now replaced before markdown parsing;
+  code fences and unknown names are untouched.
+
 ## [0.4.0] - 2026-07-08
 
 ### Added

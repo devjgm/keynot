@@ -17,8 +17,8 @@ terminal, like you.
   theming, slides in plain markdown separated by `---`, HTML comments as
   speaker notes (a format in the spirit of [marp](https://marp.app))
 - Renders headings, emphasis, lists, blockquotes, and links with
-  [ratatui](https://ratatui.rs); code blocks are syntax-highlighted
-  little terminal windows, traffic lights and all
+  [ratatui](https://ratatui.rs); code blocks render as framed,
+  syntax-highlighted panels labeled with their language
 - Background gradients -- vertical, horizontal, or radial fades between
   any colors, in plain YAML (the default dark theme ships one)
 - Real images in the terminal via

@@ -6,7 +6,7 @@ mod images;
 use crate::markdown::GradientDirection;
 use crate::markdown::{Block as MdBlock, HighlightStyle, Presentation, Slide, Transition};
 use crate::render::{
-    ColumnSpan, Highlighter, RenderContext, RenderedSlide, render_slide, split_spans_at,
+    ColumnSpan, Highlighter, RenderContext, RenderedSlide, render_slide, split_spans_at, wrap_spans,
 };
 use crate::theme::{Background, Theme};
 use config::TransitionEffects;
@@ -16,7 +16,7 @@ use eyre::{Result, WrapErr, bail};
 use images::Images;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph};
@@ -122,6 +122,47 @@ pub fn play(path: &Path, options: PlayOptions) -> Result<()> {
     let _ = terminal.show_cursor();
     ratatui::restore();
     result
+}
+
+/// Recede everything on screen behind a modal overlay: dim the text
+/// and darken the backgrounds, so the popup drawn on top visibly
+/// floats. A terminal's scrim.
+fn dim_backdrop(frame: &mut Frame, area: Rect) {
+    // Gentle: DIM handles the text; backgrounds ease to 75%. Halving
+    // everything (and double-darkening the text) read as a blackout.
+    let darken = |color: Color| match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as u16 * 3 / 4) as u8,
+            (g as u16 * 3 / 4) as u8,
+            (b as u16 * 3 / 4) as u8,
+        ),
+        other => other,
+    };
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buffer[(x, y)];
+            cell.modifier.insert(Modifier::DIM);
+            cell.bg = darken(cell.bg);
+        }
+    }
+}
+
+/// A drop shadow under a popup: dark strips one row below and two
+/// columns right (two, because terminal cells are tall).
+fn drop_shadow(frame: &mut Frame, popup: Rect, area: Rect) {
+    let shadow = Color::Rgb(0x08, 0x08, 0x08);
+    let buffer = frame.buffer_mut();
+    let right_strip = (popup.right()..(popup.right() + 2).min(area.right())).flat_map(|x| {
+        ((popup.y + 1)..(popup.bottom() + 1).min(area.bottom())).map(move |y| (x, y))
+    });
+    let bottom_strip = ((popup.x + 2)..popup.right().min(area.right())).filter_map(|x| {
+        let y = popup.bottom();
+        (y < area.bottom()).then_some((x, y))
+    });
+    for (x, y) in right_strip.chain(bottom_strip) {
+        buffer[(x, y)].bg = shadow;
+    }
 }
 
 /// The region slide transitions animate: the whole screen except the
@@ -266,6 +307,8 @@ struct App {
     /// Slide number being typed in the outline (1-based, as displayed).
     outline_input: Option<usize>,
     help: bool,
+    /// `s`: the speaker-notes overlay is showing.
+    show_notes: bool,
     /// Speaker's line highlight: (column, index into that column's
     /// non-blank rendered lines), styled per the `highlight:` key.
     highlight: Option<(usize, usize)>,
@@ -324,6 +367,7 @@ impl App {
             selected: current,
             outline_input: None,
             help: false,
+            show_notes: false,
             highlight: None,
             scroll: 0,
             pending_images: None,
@@ -510,6 +554,10 @@ impl App {
             self.help = false;
             return false;
         }
+        if self.show_notes {
+            self.show_notes = false;
+            return false;
+        }
         match key.code {
             KeyCode::Char('q') => return true,
             KeyCode::Char('?') => self.help = true,
@@ -538,6 +586,7 @@ impl App {
             // Slides mode only: in the outline it would ambiguously
             // target the playing slide, not the selected one.
             KeyCode::Char('e') => self.edit_requested = true,
+            KeyCode::Char('s') => self.show_notes = true,
             KeyCode::Home | KeyCode::Char('g') => self.goto(0),
             KeyCode::End | KeyCode::Char('G') => self.goto(usize::MAX),
             KeyCode::Esc => self.highlight = None,
@@ -771,8 +820,14 @@ impl App {
             Mode::Outline => self.draw_outline(frame, content),
         }
         self.draw_footer(frame, footer);
+        if self.help || self.show_notes {
+            dim_backdrop(frame, area);
+        }
         if self.help {
             self.draw_help(frame, area);
+        }
+        if self.show_notes {
+            self.draw_notes(frame, area);
         }
     }
 
@@ -946,7 +1001,16 @@ impl App {
         // kitty/iTerm2 protocols pack their escape payload (including a
         // transmit-once sequence) into single buffer cells, and an effect
         // rewriting such a cell would silently swallow the image.
+        //
+        // While an overlay (help, notes) is up, images do not draw at
+        // all: the backdrop scrim cannot dim a bitmap, and mutating
+        // kitty placeholder cells corrupts the picture's fragments.
+        // Their reserved rows recede into the dimmed background.
+        let overlay_open = self.help || self.show_notes;
         for placement in &cache.rendered.images {
+            if overlay_open {
+                break;
+            }
             let Some(protocol) = self.images.protocol_mut(&placement.source) else {
                 continue;
             };
@@ -1093,6 +1157,73 @@ impl App {
         );
     }
 
+    /// The `s` overlay: this slide's speaker notes (HTML comments in
+    /// the source), over the slide like the help popup. On a shared
+    /// screen the audience sees it too -- it is a peek, not a
+    /// presenter view.
+    fn draw_notes(&self, frame: &mut Frame, area: Rect) {
+        let notes = self
+            .presentation
+            .slides
+            .get(self.current)
+            .map(|s| s.notes.as_slice())
+            .unwrap_or_default();
+        let width = 62.min(area.width.saturating_sub(2));
+        let wrap_width = width.saturating_sub(4) as usize;
+
+        let mut lines: Vec<Line> = Vec::new();
+        if notes.is_empty() {
+            lines.push(Line::styled(
+                "(no notes on this slide)",
+                Style::default()
+                    .fg(self.theme.text)
+                    .add_modifier(Modifier::DIM | Modifier::ITALIC),
+            ));
+        }
+        for (i, note) in notes.iter().enumerate() {
+            if i > 0 {
+                lines.push(Line::raw(""));
+            }
+            lines.extend(wrap_spans(
+                vec![Span::styled(
+                    note.clone(),
+                    Style::default().fg(self.theme.text),
+                )],
+                wrap_width,
+            ));
+        }
+        let indented: Vec<Line> = lines
+            .into_iter()
+            .map(|line| {
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(line.spans);
+                Line::from(spans).style(line.style)
+            })
+            .collect();
+
+        let height = (indented.len() as u16 + 2).min(area.height.saturating_sub(2));
+        let popup = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
+        drop_shadow(frame, popup, area);
+        let block = Block::bordered()
+            .border_set(ASCII_BORDER)
+            .border_style(Style::default().fg(self.theme.accent))
+            .title(" speaker notes ")
+            .title_alignment(Alignment::Center)
+            .title_style(
+                Style::default()
+                    .fg(self.theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .style(Style::default().bg(self.theme.code_background));
+        frame.render_widget(Clear, popup);
+        frame.render_widget(Paragraph::new(indented).block(block), popup);
+    }
+
     fn draw_help(&self, frame: &mut Frame, area: Rect) {
         let rows: &[(&str, &str)] = &[
             ("right, space, l, n", "next slide"),
@@ -1106,6 +1237,7 @@ impl App {
             ("0-9 (outline)", "go to number"),
             ("!", "shell; exit resumes"),
             ("e", "edit file; exit resumes"),
+            ("s", "speaker notes"),
             ("r", "reload file"),
             ("?", "help"),
             ("q, ctrl-c", "quit"),
@@ -1136,6 +1268,7 @@ impl App {
             width,
             height,
         );
+        drop_shadow(frame, popup, area);
         let block = Block::bordered()
             .border_set(ASCII_BORDER)
             .border_style(Style::default().fg(self.theme.accent))
@@ -1490,6 +1623,67 @@ mod tests {
         app.mode = Mode::Outline;
         press(&mut app, KeyCode::Char('e'));
         assert!(!app.edit_requested, "e is a slides-mode key");
+    }
+
+    #[test]
+    fn images_hide_while_an_overlay_is_open() {
+        // The scrim cannot dim a bitmap, and mutating kitty placeholder
+        // cells corrupts fragments; images recede entirely instead.
+        let mut app = test_app_with_image("![p](x.png)\n", "x.png");
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(!image_columns(&terminal).is_empty(), "visible normally");
+        press(&mut app, KeyCode::Char('s'));
+        let terminal = draw(&mut app, Duration::ZERO);
+        assert!(
+            image_columns(&terminal).is_empty(),
+            "hidden behind the scrim"
+        );
+    }
+
+    #[test]
+    fn overlays_dim_the_backdrop() {
+        let mut app = test_app("# A\n\n<!-- note -->\n");
+        let before = draw(&mut app, Duration::ZERO);
+        let corner_before = before.backend().buffer()[(1, 1)].bg;
+        press(&mut app, KeyCode::Char('s'));
+        let terminal = draw(&mut app, Duration::ZERO);
+        let buffer = terminal.backend().buffer();
+        let corner = &buffer[(1, 1)];
+        assert!(
+            corner.modifier.contains(Modifier::DIM),
+            "backdrop text dims under the overlay"
+        );
+        assert_ne!(corner.bg, corner_before, "backdrop background darkens");
+    }
+
+    #[test]
+    fn s_shows_the_speaker_notes_overlay() {
+        let mut app = test_app("# A\n\n<!-- remember to breathe -->\n---\n# B\n");
+        press(&mut app, KeyCode::Char('s'));
+        let terminal = draw(&mut app, Duration::ZERO);
+        let screen = buffer_text(&terminal);
+        assert!(screen.contains("speaker notes"), "{screen}");
+        assert!(screen.contains("remember to breathe"), "{screen}");
+        // Any key dismisses, like the help overlay.
+        press(&mut app, KeyCode::Char('x'));
+        let screen = buffer_text(&draw(&mut app, Duration::ZERO));
+        assert!(!screen.contains("remember to breathe"));
+    }
+
+    #[test]
+    fn notes_overlay_says_when_a_slide_has_none() {
+        let mut app = test_app("# A\n");
+        press(&mut app, KeyCode::Char('s'));
+        let screen = buffer_text(&draw(&mut app, Duration::ZERO));
+        assert!(screen.contains("no notes on this slide"), "{screen}");
+    }
+
+    #[test]
+    fn s_does_nothing_in_the_outline() {
+        let mut app = test_app("# A\n");
+        app.mode = Mode::Outline;
+        press(&mut app, KeyCode::Char('s'));
+        assert!(!app.show_notes);
     }
 
     #[test]

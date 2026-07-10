@@ -108,15 +108,17 @@ fn push_slide(slides: &mut Vec<RawSlide>, columns: &mut Vec<(String, usize)>, st
 }
 
 /// An open fenced code block: the fence character and its length.
+/// Shared with the slide parser, which needs fence awareness for its
+/// pre-parse emoji pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Fence {
+pub(super) struct Fence {
     ch: char,
     len: usize,
 }
 
 impl Fence {
     /// Does this line open a fenced code block?
-    fn opened_by(line: &str) -> Option<Fence> {
+    pub(super) fn opened_by(line: &str) -> Option<Fence> {
         // A fence may be indented by at most three spaces (a tab or deeper
         // indentation makes it indented code, which we do not protect).
         let trimmed = line.trim_start_matches(' ');
@@ -140,7 +142,7 @@ impl Fence {
     }
 
     /// Does this line close this fence?
-    fn closed_by(&self, line: &str) -> bool {
+    pub(super) fn closed_by(&self, line: &str) -> bool {
         let trimmed = line.trim();
         !trimmed.is_empty() && trimmed.chars().all(|c| c == self.ch) && trimmed.len() >= self.len
     }

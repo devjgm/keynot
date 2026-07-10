@@ -7,4 +7,4 @@ mod wrap;
 pub use highlight::Highlighter;
 pub use slide::tallest_slide;
 pub(crate) use slide::{ColumnSpan, RenderContext, RenderedSlide, render_slide};
-pub(crate) use wrap::split_spans_at;
+pub(crate) use wrap::{split_spans_at, wrap_spans};

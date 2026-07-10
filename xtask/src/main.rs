@@ -214,8 +214,8 @@ fn fetch_image(url: &str) -> DynamicImage {
 ///   transparent pixels. True black occurs nowhere else -- the theme
 ///   backgrounds are lighter, as is text. An opaque, non-orange image
 ///   would go undetected and stay as half-blocks.
-/// - The picture is at least 60x60 px: the code windows' traffic-light
-///   dots share Ferris's hues, but never at that size.
+/// - The picture is at least 60x60 px: stray warm-colored glyphs can
+///   share Ferris's hues, but never at that size.
 fn composite_real_image(shot: &mut RgbaImage, real: &DynamicImage) -> bool {
     let (w, h) = shot.dimensions();
     let is_image_cell = |p: &Rgba<u8>| {
@@ -237,8 +237,9 @@ fn composite_real_image(shot: &mut RgbaImage, real: &DynamicImage) -> bool {
     if max_x == 0 {
         return false;
     }
-    // Small matches are not a picture: code windows' traffic-light dots
-    // are the same red-orange hues, but only a few pixels each.
+    // Small matches are not a picture: stray warm-colored glyphs
+    // (syntax tokens, emoji) can share Ferris's hues, but never at
+    // this size.
     if max_x - min_x < 60 || max_y - min_y < 60 {
         return false;
     }

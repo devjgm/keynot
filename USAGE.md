@@ -74,6 +74,7 @@ Keys during the show (press `?` anytime for this list):
 | esc (in outline)             | back without jumping (clears a typed number first) |
 | `!`                          | open an interactive shell; exiting it resumes the show |
 | `e`                          | edit the file in `$VISUAL`/`$EDITOR`; exiting reloads and resumes |
+| `s`                          | peek at this slide's speaker notes (any key closes) |
 | `r`                          | reload the file from disk |
 | `?`                          | toggle help               |
 | `q`, ctrl-c                  | quit                      |

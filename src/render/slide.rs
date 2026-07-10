@@ -627,10 +627,10 @@ fn render_list(list: &ListBlock, ctx: &RenderContext, width: usize, out: &mut Ve
     }
 }
 
-/// Code blocks render, by default, as a little terminal window: a
-/// rounded border with traffic-light dots in the title bar and the
-/// language name in the bottom edge, on a panel darker than any
-/// background gradient. `code_style: plain` keeps just the panel.
+/// Code blocks render, by default, as a little framed window: a
+/// rounded border with the language named in the bottom edge, on a
+/// panel darker than any background gradient. `code_style: plain`
+/// keeps just the panel.
 fn render_code(
     language: Option<&str>,
     code: &str,
@@ -666,36 +666,11 @@ fn render_code(
     let box_width = (content_width + 4).min(width).max(12);
     let inner = box_width - 2;
 
-    // Title bar: the classic traffic lights.
-    let mut top = vec![
+    let top = vec![
         Span::styled("╭", border),
-        Span::styled(" ", border),
-        Span::styled(
-            "\u{25cf} ",
-            Style::default()
-                .fg(Color::Rgb(0xff, 0x5f, 0x57))
-                .bg(theme.code_background),
-        ),
-        Span::styled(
-            "\u{25cf} ",
-            Style::default()
-                .fg(Color::Rgb(0xfe, 0xbc, 0x2e))
-                .bg(theme.code_background),
-        ),
-        Span::styled(
-            "\u{25cf}",
-            Style::default()
-                .fg(Color::Rgb(0x28, 0xc8, 0x40))
-                .bg(theme.code_background),
-        ),
-        Span::styled(" ", border),
+        Span::styled("\u{2500}".repeat(box_width.saturating_sub(2)), border),
+        Span::styled("╮", border),
     ];
-    let used: usize = top.iter().map(|s| s.content.width()).sum();
-    top.push(Span::styled(
-        "\u{2500}".repeat(box_width.saturating_sub(used + 1)),
-        border,
-    ));
-    top.push(Span::styled("╮", border));
     out.push(Line::from(top));
 
     for line in code_lines {
@@ -988,10 +963,12 @@ mod tests {
             top.starts_with('\u{256d}') && top.ends_with('\u{256e}'),
             "{top:?}"
         );
-        assert_eq!(
-            top.matches('\u{25cf}').count(),
-            3,
-            "traffic lights: {top:?}"
+        assert!(
+            top.chars()
+                .skip(1)
+                .take(top.chars().count().saturating_sub(2))
+                .all(|c| c == '\u{2500}'),
+            "a plain top edge, no adornments: {top:?}"
         );
         assert!(bottom.contains(" rust "), "language label: {bottom:?}");
         assert!(

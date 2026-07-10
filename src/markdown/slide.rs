@@ -186,11 +186,12 @@ impl Slide {
                 | Options::ENABLE_GFM
                 | Options::ENABLE_DEFINITION_LIST
                 | Options::ENABLE_FOOTNOTES;
-            let parser = Parser::new_ext(source, options);
+            let source = defuse_leading_shortcodes(source);
+            let parser = Parser::new_ext(&source, options);
             let mut builder = SlideBuilder {
                 // Byte offset where each source line begins, so events
                 // (which carry byte ranges) map back to line numbers.
-                line_starts: line_starts(source),
+                line_starts: line_starts(&source),
                 ..SlideBuilder::default()
             };
             for (event, range) in parser.into_offset_iter() {
@@ -228,6 +229,74 @@ struct ParsedColumn {
     blocks: Vec<Block>,
     block_lines: Vec<usize>,
     notes: Vec<String>,
+}
+
+/// Replace a known emoji shortcode at the start of a line (outside
+/// fenced code) before markdown parsing. A line-leading `:crab:` would
+/// otherwise parse as definition-list syntax -- the colon becomes the
+/// definition marker, the preceding paragraph its term, and the emoji
+/// is never seen. Replacing just the first shortcode removes the
+/// leading colon; the rest of the line goes through the normal inline
+/// pass, and line counts are unchanged so source-line tracking stays
+/// exact.
+fn defuse_leading_shortcodes(source: &str) -> std::borrow::Cow<'_, str> {
+    use super::splitter::Fence;
+    if !source.contains(':') {
+        return source.into();
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut fence: Option<Fence> = None;
+    let mut changed = false;
+    for (i, line) in source.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        match &fence {
+            Some(open) if open.closed_by(line) => {
+                fence = None;
+                out.push_str(line);
+                continue;
+            }
+            Some(_) => {
+                out.push_str(line);
+                continue;
+            }
+            None => {
+                if let Some(open) = Fence::opened_by(line) {
+                    fence = Some(open);
+                    out.push_str(line);
+                    continue;
+                }
+            }
+        }
+        let indent = line.len() - line.trim_start().len();
+        let rest = &line[indent..];
+        match leading_shortcode(rest) {
+            Some((emoji, consumed)) => {
+                out.push_str(&line[..indent]);
+                out.push_str(emoji);
+                out.push_str(&rest[consumed..]);
+                changed = true;
+            }
+            None => out.push_str(line),
+        }
+    }
+    if changed { out.into() } else { source.into() }
+}
+
+/// If `text` begins with `:name:` for a known emoji shortcode, the
+/// emoji and the byte length of the shortcode.
+fn leading_shortcode(text: &str) -> Option<(&'static str, usize)> {
+    let name = text.strip_prefix(':')?;
+    let end = name.find(':')?;
+    if name[..end].is_empty()
+        || !name[..end]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-'))
+    {
+        return None;
+    }
+    emojis::get_by_shortcode(&name[..end]).map(|e| (e.as_str(), end + 2))
 }
 
 /// Byte offsets where each line of `source` begins.
@@ -1129,6 +1198,62 @@ mod tests {
     fn parse_is_a_single_column() {
         let slide = Slide::parse("hello");
         assert_eq!(slide.columns.len(), 1);
+    }
+
+    #[test]
+    fn line_leading_shortcode_is_an_emoji_not_a_definition() {
+        // Regression: `:crab:` at line start parsed as definition-list
+        // syntax, turning the previous line into a bold term and
+        // eating the colon.
+        let slide = Slide::parse("A subtitle line\n:crab: A Ferris Talk\n");
+        assert!(
+            !slide.columns[0]
+                .iter()
+                .any(|b| matches!(b, Block::DefinitionList(_))),
+            "no definition list: {:?}",
+            slide.columns[0]
+        );
+        let Block::Paragraph(spans) = &slide.columns[0][0] else {
+            panic!("expected paragraph");
+        };
+        let text = text_of(spans);
+        assert!(text.contains('\u{1f980}'), "emoji replaced: {text:?}");
+    }
+
+    #[test]
+    fn real_definition_lists_still_parse_with_inner_emoji() {
+        let slide = Slide::parse("Term\n: definition with :crab: inside\n");
+        let Block::DefinitionList(items) = &slide.columns[0][0] else {
+            panic!("expected definition list");
+        };
+        let Block::Paragraph(spans) = &items[0].definitions[0][0] else {
+            panic!("definition body");
+        };
+        assert!(text_of(spans).contains('\u{1f980}'));
+    }
+
+    #[test]
+    fn line_leading_shortcode_in_code_fences_stays_literal() {
+        let slide = Slide::parse("```\n:crab: literal\n```\n");
+        let Block::CodeBlock { code, .. } = &slide.columns[0][0] else {
+            panic!("expected code block");
+        };
+        assert_eq!(code.trim(), ":crab: literal");
+    }
+
+    #[test]
+    fn line_leading_unknown_shortcode_is_untouched() {
+        // `:notathing:` stays as written; if that means definition-list
+        // syntax, that is what the author wrote.
+        let slide = Slide::parse(":notathing: alone\n");
+        let all = format!("{:?}", slide.columns[0]);
+        assert!(all.contains("notathing"), "{all}");
+    }
+
+    #[test]
+    fn defused_lines_keep_source_line_numbers() {
+        let slide = Slide::parse("first\n\n:tada: second\n\nthird\n");
+        assert_eq!(slide.block_lines, vec![vec![1, 3, 5]]);
     }
 
     #[test]

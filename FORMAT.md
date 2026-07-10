@@ -253,11 +253,10 @@ Mention that the Q3 numbers are preliminary.
 Comments work inline too (`before <!-- hidden --> after`) and may span
 multiple lines. `keynot check` reports how many notes a file contains.
 
-Today, notes are parsed and counted but never displayed: there is no
-presenter view yet, so they live only in the source. A future version
-may surface them (e.g. a speaker window or an export); writing notes
-now is still worthwhile, both for that future and for readers of the
-file.
+During a show, press `s` to peek at the current slide's notes in an
+overlay (any key closes it). The overlay appears on the shared screen
+too -- it is a quick peek for rehearsals and demos, not a hidden
+presenter view. `keynot check` reports how many notes a file has.
 
 ## Supported markdown
 
@@ -310,9 +309,9 @@ checked boxes in bold accent, unchecked ones dimmed.
 
 ### Code blocks
 
-Fenced code blocks render as a small terminal window: a rounded border
-with traffic-light dots, the language name in the bottom edge, and a
-panel darker than the background. Prefer just the plain panel? Set
+Fenced code blocks render as a small framed window: a rounded border
+with the language name in the bottom edge, on a panel darker than the
+background. Prefer just the plain panel? Set
 `code_style: plain` in the frontmatter. Either way they are syntax
 highlighted; put the language after the opening fence:
 
@@ -332,7 +331,7 @@ clipped, so format your snippets for the room.
 ### Tables
 
 GFM tables render on the code panel background, with rounded borders
-matching the code windows:
+matching the code frames:
 
 ```markdown
 | name | role     | id |
