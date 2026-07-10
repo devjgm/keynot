@@ -32,10 +32,16 @@ screenshots:
     cargo build
     cargo xtask screenshots 2 3 4
 
-# Check all release prerequisites: local CI, a bumped version, green GitHub CI, a packageable crate
-prerelease: ci
+# Check all release prerequisites: local CI, fresh screenshots, a bumped version, green GitHub CI, a packageable crate
+prerelease: ci screenshots
     #!/usr/bin/env bash
     set -euo pipefail
+    # The screenshots recipe just regenerated the gallery; any diff
+    # means the committed images were stale for this code.
+    if [ -n "$(jj diff --name-only assets/screenshots 2>/dev/null || git status --porcelain assets/screenshots)" ]; then
+        echo "screenshots were stale; regenerated ones are in the working copy -- review and commit them" >&2
+        exit 1
+    fi
     version=$(cargo pkgid | sed 's/.*[#@]//')
     # Catch a forgotten version bump before anything irreversible: the
     # version must not already be tagged nor already on crates.io.
